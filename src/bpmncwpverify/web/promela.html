@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lambda Response</title>
+</head>
+<body>
+  <h1>Promela:</h1>
+  <div id="statusContainer" style="white-space: pre-wrap; font-size: 16px; color: blue;"></div>
+  <pre><code id="promelaContainer" hidden></code></pre>
+  <br>
+  <a href="mainPage.html">Go Back</a>
+
+  <script>
+    // Retrieve and display the stored response
+    const statusContainer = document.getElementById('statusContainer');
+    const promelaContainer = document.getElementById('promelaContainer');
+    const promela = localStorage.getItem('promela');
+
+    if (promela) {
+      statusContainer.innerHTML = 'Promela:';
+      promelaContainer.innerHTML = promela;
+      promelaContainer.hidden = false;
+    } else {
+      statusContainer.textContent = "No response found.";
+    }
+  </script>
+</body>
+</html>

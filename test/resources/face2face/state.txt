@@ -1,0 +1,13 @@
+enum all { INIT other}
+enum TermsType {agreed failed pending noRetry}
+enum OwnerType {buyerName sellerName}
+
+const paymentAmount: byte = 253
+const belowPaymentAmount: byte = 252
+const noRetryPayment: byte = 254
+const pendingPayment: byte = 255
+
+var terms:TermsType = pending
+var backpackOwner: OwnerType = sellerName
+var paymentOwner: OwnerType = buyerName
+var paymentOffered: byte = pendingPayment {paymentAmount belowPaymentAmount noRetryPayment pendingPayment}

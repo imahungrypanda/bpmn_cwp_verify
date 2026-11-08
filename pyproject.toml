@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=69.5.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bpmn-cwp-verify"
+description = "A tool to verify that workflow implements a cognitive work problem"
+version = "0.0.1"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "numpy>=1.21.0",
+  "pandas>=2.2.2",
+  "returns",
+  "antlr4-python3-runtime",
+  "requests",
+  "defusedxml",
+  "graphviz",
+  "bs4"
+]
+
+[project.scripts]
+verify = "bpmncwpverify.cli:verify"
+cli_verify = "bpmncwpverify.client_cli.clientcli:cli_verify"
+generate-stubs = "bpmncwpverify.cli:generate_stubs"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0",
+  "pytest-mock",
+  "ruff>=0.4.4",
+  "returns==0.27.0",
+  "mypy==1.20.2",
+  "pre-commit",
+  "nitpick",
+  "antlr4-tools",
+  "pytest-cov",
+  "types-requests",
+  ]
+
+[tool.ruff]
+lint.extend-select = ["I", "UP"]
+target-version = "py312"
+
+[tool.nitpick]
+style = "https://raw.githubusercontent.com/wemake-services/wemake-python-styleguide/master/styles/mypy.toml"
+
+[tool.mypy]
+plugins = ["returns.contrib.mypy.returns_plugin"]
+exclude = [
+  "^src/bpmncwpverify/antlr"
+]
+disallow_any_explicit = false
+disallow_any_generics = false
+follow_imports = "silent"
+ignore_missing_imports = true
+strict = true
+warn_unreachable = true
+disallow_subclassing_any = true
+
+[tool.pytest.ini_options]
+addopts = "--cov=./src/bpmncwpverify/ --cov-report=html --cov-report=term"

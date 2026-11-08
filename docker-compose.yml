@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  dev:
+    build:
+      context: .
+      target: dev
+    image: bpmn-cwp-verify:dev
+    volumes:
+      # Mount source code for hot reload
+      - ./src:/app/src
+      - ./pyproject.toml:/app/pyproject.toml
+      - ./test:/app/test
+    working_dir: /app
+    command: /bin/bash
+    stdin_open: true
+    tty: true

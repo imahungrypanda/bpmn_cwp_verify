@@ -1,0 +1,381 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:open-bpmn="http://open-bpmn.org/XMLSchema" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" exporter="org.openbpmn" exporterVersion="1.0.0" targetNamespace="http://open-bpmn.org">
+  <bpmn2:collaboration id="collaboration_1" name="Default Collaboration">
+    <bpmn2:participant id="participant_otL9YQ" name="Default Process" processRef="process_1"/>
+    <bpmn2:participant id="participant_XckRqA" name="Buyer/Seller" processRef="process_G9YNqw">
+      <bpmn2:documentation id="documentation_vI6eiQ"/>
+    </bpmn2:participant>
+  </bpmn2:collaboration>
+  <bpmn2:extensionElements>
+    <open-bpmn:auto-align>true</open-bpmn:auto-align>
+  </bpmn2:extensionElements>
+  <bpmn2:process definitionalCollaborationRef="collaboration_1" id="process_1" name="Default Process" processType="Public">
+    <bpmn2:documentation id="documentation_bVf0JQ"/>
+  </bpmn2:process>
+  <bpmn2:process definitionalCollaborationRef="collaboration_1" id="process_G9YNqw" isExecutable="true" name="Buyer/Seller" processType="Private">
+    <bpmn2:startEvent id="event_fQlwZw" name="Start7">
+      <bpmn2:documentation id="documentation_U7yIMQ"/>
+      <bpmn2:outgoing>sequenceFlow_Wu6RJA</bpmn2:outgoing>
+    </bpmn2:startEvent>
+    <bpmn2:task id="task_hy5HWw" name="1-Buyer sees desired backpack and meets Seller">
+      <bpmn2:documentation id="documentation_lyxzCg"/>
+      <nullsrc_provenance id="src_provenance_YDilqg"/>
+      <nulldest_provenance id="dest_provenance_xraJyQ"/>
+      <nullpromela_code id="promela_code_dwow4w"><![CDATA[backpackOwner = sellerName
+paymentOwner = buyerName]]></nullpromela_code>
+      <bpmn2:incoming>sequenceFlow_Wu6RJA</bpmn2:incoming>
+      <bpmn2:outgoing>sequenceFlow_7CyvhA</bpmn2:outgoing>
+    </bpmn2:task>
+    <bpmn2:sequenceFlow id="sequenceFlow_Wu6RJA" sourceRef="event_fQlwZw" targetRef="task_hy5HWw">
+      <bpmn2:documentation id="documentation_awSrsQ"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:parallelGateway gatewayDirection="Diverging" id="gateway_bfgTUA" name="both">
+      <bpmn2:documentation id="documentation_oViPEQ"/>
+      <bpmn2:incoming>sequenceFlow_7CyvhA</bpmn2:incoming>
+      <bpmn2:outgoing>sequenceFlow_OwSR9w</bpmn2:outgoing>
+      <bpmn2:outgoing>sequenceFlow_95YZag</bpmn2:outgoing>
+      <bpmn2:incoming>sequenceFlow_w38KHQ</bpmn2:incoming>
+    </bpmn2:parallelGateway>
+    <bpmn2:sequenceFlow id="sequenceFlow_7CyvhA" sourceRef="task_hy5HWw" targetRef="gateway_bfgTUA">
+      <bpmn2:documentation id="documentation_M0c92g"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:task id="task_jWS0ww" name="3-Buyer and Seller negotiate price">
+      <bpmn2:documentation id="documentation_01V8uw"/>
+      <nullsrc_provenance id="src_provenance_T8Cv4w"/>
+      <nulldest_provenance id="dest_provenance_c3smxQ"/>
+      <nullpromela_code id="promela_code_mU61xg"><![CDATA[if
+:: true -> paymentOffered = paymentAmount
+:: true -> paymentOffered = belowPaymentAmount
+fi]]></nullpromela_code>
+      <bpmn2:incoming>sequenceFlow_OwSR9w</bpmn2:incoming>
+      <bpmn2:outgoing>sequenceFlow_fx0bRQ</bpmn2:outgoing>
+    </bpmn2:task>
+    <bpmn2:sequenceFlow id="sequenceFlow_OwSR9w" sourceRef="gateway_bfgTUA" targetRef="task_jWS0ww">
+      <bpmn2:documentation id="documentation_7tQbOw"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:parallelGateway gatewayDirection="Converging" id="gateway_JIr6aA" name="end both">
+      <bpmn2:documentation id="documentation_MUuQ5Q"/>
+      <bpmn2:incoming>sequenceFlow_fx0bRQ</bpmn2:incoming>
+      <bpmn2:incoming>sequenceFlow_7bZn0A</bpmn2:incoming>
+      <bpmn2:outgoing>sequenceFlow_IvDKtQ</bpmn2:outgoing>
+    </bpmn2:parallelGateway>
+    <bpmn2:sequenceFlow id="sequenceFlow_fx0bRQ" sourceRef="task_jWS0ww" targetRef="gateway_JIr6aA">
+      <bpmn2:documentation id="documentation_LiYHgA"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:task id="task_0s0ORw" name="2-Buyer and Seller neogiate terms">
+      <bpmn2:documentation id="documentation_0BOjqw"/>
+      <nullsrc_provenance id="src_provenance_fQZpSg"/>
+      <nulldest_provenance id="dest_provenance_IlIUlw"/>
+      <nullpromela_code id="promela_code_zSNMpg"><![CDATA[if
+:: true -> terms = agreed
+:: true -> terms = failed
+fi]]></nullpromela_code>
+      <bpmn2:incoming>sequenceFlow_95YZag</bpmn2:incoming>
+      <bpmn2:outgoing>sequenceFlow_7bZn0A</bpmn2:outgoing>
+    </bpmn2:task>
+    <bpmn2:sequenceFlow id="sequenceFlow_95YZag" sourceRef="gateway_bfgTUA" targetRef="task_0s0ORw">
+      <bpmn2:documentation id="documentation_0IdIvg"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:sequenceFlow id="sequenceFlow_7bZn0A" sourceRef="task_0s0ORw" targetRef="gateway_JIr6aA">
+      <bpmn2:documentation id="documentation_IGqhVw"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:exclusiveGateway gatewayDirection="Mixed" id="gateway_0Z6ttA" name="payment and terms agreed">
+      <bpmn2:documentation id="documentation_v4clwA"/>
+      <bpmn2:incoming>sequenceFlow_IvDKtQ</bpmn2:incoming>
+      <bpmn2:outgoing>sequenceFlow_nFmIJg</bpmn2:outgoing>
+      <bpmn2:incoming>sequenceFlow_Zn6XFQ</bpmn2:incoming>
+      <bpmn2:outgoing>sequenceFlow_w38KHQ</bpmn2:outgoing>
+      <bpmn2:outgoing>sequenceFlow_feVS1g</bpmn2:outgoing>
+      <bpmn2:incoming>sequenceFlow_qkZCjA</bpmn2:incoming>
+      <bpmn2:outgoing>sequenceFlow_DExong</bpmn2:outgoing>
+      <bpmn2:outgoing>sequenceFlow_qCK95A</bpmn2:outgoing>
+    </bpmn2:exclusiveGateway>
+    <bpmn2:sequenceFlow id="sequenceFlow_IvDKtQ" sourceRef="gateway_JIr6aA" targetRef="gateway_0Z6ttA">
+      <bpmn2:documentation id="documentation_8hx0kQ"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:task id="task_o0yUYw" name="5-Buyer and Seller repeat terms and negotiation">
+      <bpmn2:documentation id="documentation_ycZ0UQ"/>
+      <nullsrc_provenance id="src_provenance_u3vuow"/>
+      <nulldest_provenance id="dest_provenance_kE9XUQ"/>
+      <nullpromela_code id="promela_code_0Ic61Q"><![CDATA[if
+:: true -> terms = agreed
+:: true -> terms = failed
+:: true -> terms = noRetry
+fi]]></nullpromela_code>
+      <bpmn2:incoming>sequenceFlow_nFmIJg</bpmn2:incoming>
+      <bpmn2:outgoing>sequenceFlow_Zn6XFQ</bpmn2:outgoing>
+    </bpmn2:task>
+    <bpmn2:sequenceFlow id="sequenceFlow_nFmIJg" name="terms == failed" sourceRef="gateway_0Z6ttA" targetRef="task_o0yUYw">
+      <bpmn2:documentation id="documentation_30Vtgg"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:sequenceFlow id="sequenceFlow_Zn6XFQ" sourceRef="task_o0yUYw" targetRef="gateway_0Z6ttA">
+      <bpmn2:documentation id="documentation_ZjllEw"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:sequenceFlow id="sequenceFlow_w38KHQ" name="paymentOffered &lt; paymentAmount &amp;&amp; terms == failed" sourceRef="gateway_0Z6ttA" targetRef="gateway_bfgTUA">
+      <bpmn2:documentation id="documentation_z7tcBg"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:task id="task_bSPHoQ" name="4-Buyer and Seller repeat price negotiation">
+      <bpmn2:documentation id="documentation_01IokA"/>
+      <nullsrc_provenance id="src_provenance_65Gm7w"/>
+      <nulldest_provenance id="dest_provenance_G158HA"/>
+      <nullpromela_code id="promela_code_CSJyqQ"><![CDATA[if
+:: true -> paymentOffered = paymentAmount
+:: true -> paymentOffered = belowPaymentAmount
+:: true -> paymentOffered = noRetryPayment
+fi]]></nullpromela_code>
+      <bpmn2:incoming>sequenceFlow_feVS1g</bpmn2:incoming>
+      <bpmn2:outgoing>sequenceFlow_qkZCjA</bpmn2:outgoing>
+    </bpmn2:task>
+    <bpmn2:sequenceFlow id="sequenceFlow_feVS1g" name="paymentOffered &lt; paymentAmount" sourceRef="gateway_0Z6ttA" targetRef="task_bSPHoQ">
+      <bpmn2:documentation id="documentation_4DMQoA"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:sequenceFlow id="sequenceFlow_qkZCjA" sourceRef="task_bSPHoQ" targetRef="gateway_0Z6ttA">
+      <bpmn2:documentation id="documentation_GT1OiA"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:endEvent id="event_80zfsg" name="Purchase Failed">
+      <bpmn2:documentation id="documentation_hjlAEg"/>
+      <bpmn2:incoming>sequenceFlow_DExong</bpmn2:incoming>
+    </bpmn2:endEvent>
+    <bpmn2:sequenceFlow id="sequenceFlow_DExong" name="paymentOffered == noRetryPayment || terms == noRetry" sourceRef="gateway_0Z6ttA" targetRef="event_80zfsg">
+      <bpmn2:documentation id="documentation_74giIA"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:task id="task_8aDqZA" name="6-Buyer and Seller shake hands">
+      <bpmn2:documentation id="documentation_8S0MJA"/>
+      <nullsrc_provenance id="src_provenance_vOlLhw"/>
+      <nulldest_provenance id="dest_provenance_2twIWw"/>
+      <nullpromela_code id="promela_code_f92yVg"/>
+      <bpmn2:incoming>sequenceFlow_qCK95A</bpmn2:incoming>
+      <bpmn2:outgoing>sequenceFlow_F6MR6w</bpmn2:outgoing>
+    </bpmn2:task>
+    <bpmn2:sequenceFlow id="sequenceFlow_qCK95A" name="paymentOffered == paymentAmount &amp;&amp; terms == agreed" sourceRef="gateway_0Z6ttA" targetRef="task_8aDqZA">
+      <bpmn2:documentation id="documentation_yUAWjw"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:parallelGateway gatewayDirection="Diverging" id="gateway_ynk0sA" name="both1">
+      <bpmn2:documentation id="documentation_twbVJw"/>
+      <bpmn2:incoming>sequenceFlow_F6MR6w</bpmn2:incoming>
+      <bpmn2:outgoing>sequenceFlow_L4twcQ</bpmn2:outgoing>
+      <bpmn2:outgoing>sequenceFlow_N2gTbw</bpmn2:outgoing>
+    </bpmn2:parallelGateway>
+    <bpmn2:sequenceFlow id="sequenceFlow_F6MR6w" sourceRef="task_8aDqZA" targetRef="gateway_ynk0sA">
+      <bpmn2:documentation id="documentation_itArag"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:task id="task_5VFNiw" name="7a-Buyer hands cash payment to Seller">
+      <bpmn2:documentation id="documentation_0EKifg"/>
+      <nullsrc_provenance id="src_provenance_QLvUKg"/>
+      <nulldest_provenance id="dest_provenance_0Q3hHw"/>
+      <nullpromela_code id="promela_code_0cmIiw"><![CDATA[paymentOwner = sellerName]]></nullpromela_code>
+      <bpmn2:incoming>sequenceFlow_L4twcQ</bpmn2:incoming>
+      <bpmn2:outgoing>sequenceFlow_ykmRCQ</bpmn2:outgoing>
+    </bpmn2:task>
+    <bpmn2:sequenceFlow id="sequenceFlow_L4twcQ" sourceRef="gateway_ynk0sA" targetRef="task_5VFNiw">
+      <bpmn2:documentation id="documentation_oGDHzQ"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:task id="task_bxDTSg" name="7b-Seller hands Backpack to Buyer">
+      <bpmn2:documentation id="documentation_z91ReQ"/>
+      <nullsrc_provenance id="src_provenance_4CUo4A"/>
+      <nulldest_provenance id="dest_provenance_izjUbw"/>
+      <nullpromela_code id="promela_code_SnTpUQ"><![CDATA[backpackOwner = buyerName]]></nullpromela_code>
+      <bpmn2:incoming>sequenceFlow_N2gTbw</bpmn2:incoming>
+      <bpmn2:outgoing>sequenceFlow_ybe5fQ</bpmn2:outgoing>
+    </bpmn2:task>
+    <bpmn2:sequenceFlow id="sequenceFlow_N2gTbw" sourceRef="gateway_ynk0sA" targetRef="task_bxDTSg">
+      <bpmn2:documentation id="documentation_EtefvQ"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:parallelGateway gatewayDirection="Converging" id="gateway_yTarNA" name="end both1">
+      <bpmn2:documentation id="documentation_v5y64A"/>
+      <bpmn2:incoming>sequenceFlow_ykmRCQ</bpmn2:incoming>
+      <bpmn2:incoming>sequenceFlow_ybe5fQ</bpmn2:incoming>
+      <bpmn2:outgoing>sequenceFlow_qkhVPA</bpmn2:outgoing>
+    </bpmn2:parallelGateway>
+    <bpmn2:sequenceFlow id="sequenceFlow_ykmRCQ" sourceRef="task_5VFNiw" targetRef="gateway_yTarNA">
+      <bpmn2:documentation id="documentation_plB4KA"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:sequenceFlow id="sequenceFlow_ybe5fQ" sourceRef="task_bxDTSg" targetRef="gateway_yTarNA">
+      <bpmn2:documentation id="documentation_XoRBag"/>
+    </bpmn2:sequenceFlow>
+    <bpmn2:endEvent id="event_JZn06A" name="Purchase Completed">
+      <bpmn2:documentation id="documentation_cgp7jg"/>
+      <bpmn2:incoming>sequenceFlow_qkhVPA</bpmn2:incoming>
+    </bpmn2:endEvent>
+    <bpmn2:sequenceFlow id="sequenceFlow_qkhVPA" sourceRef="gateway_yTarNA" targetRef="event_JZn06A">
+      <bpmn2:documentation id="documentation_L7TFfg"/>
+    </bpmn2:sequenceFlow>
+  </bpmn2:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1" name="OpenBPMN Diagram">
+    <bpmndi:BPMNPlane bpmnElement="collaboration_1" id="BPMNPlane_1">
+      <bpmndi:BPMNShape bpmnElement="participant_XckRqA" id="BPMNShape_hyCmdw">
+        <dc:Bounds height="620.0" width="1550.0" x="330.0" y="-190.0"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="event_fQlwZw" id="BPMNShape_orp3kA">
+        <dc:Bounds height="36.0" width="36.0" x="417.0" y="157.0"/>
+        <bpmndi:BPMNLabel id="BPMNLabel_1bObMw">
+          <dc:Bounds height="20.0" width="100.0" x="385.0" y="196.0"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="task_hy5HWw" id="BPMNShape_JTvbLw">
+        <dc:Bounds height="70.0" width="110.0" x="460.0" y="70.0"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_Wu6RJA" id="BPMNEdge_MaFzTg" sourceElement="BPMNShape_orp3kA" targetElement="BPMNShape_JTvbLw">
+        <di:waypoint x="453.0" y="175.0"/>
+        <di:waypoint x="515.0" y="175.0"/>
+        <di:waypoint x="515.0" y="140.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape bpmnElement="gateway_bfgTUA" id="BPMNShape_BAwiRQ">
+        <dc:Bounds height="50.0" width="50.0" x="620.0" y="80.0"/>
+        <bpmndi:BPMNLabel id="BPMNLabel_FzcTag">
+          <dc:Bounds height="20.0" width="100.0" x="641.0" y="99.0"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_7CyvhA" id="BPMNEdge_C5yCFQ" sourceElement="BPMNShape_JTvbLw" targetElement="BPMNShape_BAwiRQ">
+        <di:waypoint x="570.0" y="105.0"/>
+        <di:waypoint x="620.0" y="105.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape bpmnElement="task_jWS0ww" id="BPMNShape_8eMHGw">
+        <dc:Bounds height="60.0" width="110.0" x="690.0" y="150.0"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_OwSR9w" id="BPMNEdge_248T0Q" sourceElement="BPMNShape_BAwiRQ" targetElement="BPMNShape_8eMHGw">
+        <di:waypoint x="644.0" y="129.0"/>
+        <di:waypoint x="644.0" y="180.0"/>
+        <di:waypoint x="690.0" y="180.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape bpmnElement="gateway_JIr6aA" id="BPMNShape_qSwK5A">
+        <dc:Bounds height="50.0" width="50.0" x="820.0" y="80.0"/>
+        <bpmndi:BPMNLabel id="BPMNLabel_lY08xw">
+          <dc:Bounds height="20.0" width="100.0" x="738.0" y="101.0"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_fx0bRQ" id="BPMNEdge_uGJGXA" sourceElement="BPMNShape_8eMHGw" targetElement="BPMNShape_qSwK5A">
+        <di:waypoint x="800.0" y="182.0"/>
+        <di:waypoint x="845.0" y="182.0"/>
+        <di:waypoint x="845.0" y="130.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape bpmnElement="task_0s0ORw" id="BPMNShape_lziu7g">
+        <dc:Bounds height="50.0" width="110.0" x="690.0" y="0.0"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_95YZag" id="BPMNEdge_PfwXqA" sourceElement="BPMNShape_BAwiRQ" targetElement="BPMNShape_lziu7g">
+        <di:waypoint x="641.0" y="84.0"/>
+        <di:waypoint x="641.0" y="25.0"/>
+        <di:waypoint x="690.0" y="25.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_7bZn0A" id="BPMNEdge_jG2vhg" sourceElement="BPMNShape_lziu7g" targetElement="BPMNShape_qSwK5A">
+        <di:waypoint x="800.0" y="25.0"/>
+        <di:waypoint x="845.0" y="25.0"/>
+        <di:waypoint x="845.0" y="80.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape bpmnElement="gateway_0Z6ttA" id="BPMNShape_G4kfKw">
+        <dc:Bounds height="50.0" width="50.0" x="950.0" y="80.0"/>
+        <bpmndi:BPMNLabel id="BPMNLabel_a2C3eA">
+          <dc:Bounds height="20.0" width="100.0" x="925.0" y="133.0"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_IvDKtQ" id="BPMNEdge_QwXVzg" sourceElement="BPMNShape_qSwK5A" targetElement="BPMNShape_G4kfKw">
+        <di:waypoint x="870.0" y="105.0"/>
+        <di:waypoint x="950.0" y="105.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape bpmnElement="task_o0yUYw" id="BPMNShape_IAvrLw">
+        <dc:Bounds height="70.0" width="110.0" x="690.0" y="-100.0"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_nFmIJg" id="BPMNEdge_uCay9Q" sourceElement="BPMNShape_G4kfKw" targetElement="BPMNShape_IAvrLw">
+        <di:waypoint x="971.0" y="84.0"/>
+        <di:waypoint x="971.0" y="-65.0"/>
+        <di:waypoint x="800.0" y="-65.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_Zn6XFQ" id="BPMNEdge_8DIsrA" sourceElement="BPMNShape_IAvrLw" targetElement="BPMNShape_G4kfKw">
+        <di:waypoint x="745.0" y="-30.0"/>
+        <di:waypoint x="745.0" y="-16.0"/>
+        <di:waypoint x="960.0" y="-16.0"/>
+        <di:waypoint x="960.0" y="95.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_w38KHQ" id="BPMNEdge_uLst0w" sourceElement="BPMNShape_G4kfKw" targetElement="BPMNShape_BAwiRQ">
+        <di:waypoint x="987.0" y="92.0"/>
+        <di:waypoint x="987.0" y="-134.0"/>
+        <di:waypoint x="631.0" y="-134.0"/>
+        <di:waypoint x="631.0" y="94.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape bpmnElement="task_bSPHoQ" id="BPMNShape_M8TdTA">
+        <dc:Bounds height="70.0" width="110.0" x="690.0" y="250.0"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_feVS1g" id="BPMNEdge_GJwMNQ" sourceElement="BPMNShape_G4kfKw" targetElement="BPMNShape_M8TdTA">
+        <di:waypoint x="975.0" y="130.0"/>
+        <di:waypoint x="975.0" y="285.0"/>
+        <di:waypoint x="800.0" y="285.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_qkZCjA" id="BPMNEdge_ZRZ1SQ" sourceElement="BPMNShape_M8TdTA" targetElement="BPMNShape_G4kfKw">
+        <di:waypoint x="745.0" y="250.0"/>
+        <di:waypoint x="745.0" y="229.0"/>
+        <di:waypoint x="960.0" y="229.0"/>
+        <di:waypoint x="960.0" y="115.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape bpmnElement="event_80zfsg" id="BPMNShape_iQHWAw">
+        <dc:Bounds height="36.0" width="36.0" x="1097.0" y="197.0"/>
+        <bpmndi:BPMNLabel id="BPMNLabel_P055Dg">
+          <dc:Bounds height="20.0" width="100.0" x="1065.0" y="236.0"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_DExong" id="BPMNEdge_TIq33Q" sourceElement="BPMNShape_G4kfKw" targetElement="BPMNShape_iQHWAw">
+        <di:waypoint x="988.0" y="117.0"/>
+        <di:waypoint x="988.0" y="215.0"/>
+        <di:waypoint x="1097.0" y="215.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape bpmnElement="task_8aDqZA" id="BPMNShape_fWiNgQ">
+        <dc:Bounds height="50.0" width="110.0" x="1060.0" y="80.0"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_qCK95A" id="BPMNEdge_utgArQ" sourceElement="BPMNShape_G4kfKw" targetElement="BPMNShape_fWiNgQ">
+        <di:waypoint x="1000.0" y="105.0"/>
+        <di:waypoint x="1060.0" y="105.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape bpmnElement="gateway_ynk0sA" id="BPMNShape_BsXEAw">
+        <dc:Bounds height="50.0" width="50.0" x="1210.0" y="80.0"/>
+        <bpmndi:BPMNLabel id="BPMNLabel_uu9grQ">
+          <dc:Bounds height="20.0" width="100.0" x="1230.0" y="99.0"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_F6MR6w" id="BPMNEdge_vMHICw" sourceElement="BPMNShape_fWiNgQ" targetElement="BPMNShape_BsXEAw">
+        <di:waypoint x="1170.0" y="105.0"/>
+        <di:waypoint x="1210.0" y="105.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape bpmnElement="task_5VFNiw" id="BPMNShape_Dd2QXw">
+        <dc:Bounds height="50.0" width="110.0" x="1290.0" y="-20.0"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_L4twcQ" id="BPMNEdge_TKgIWw" sourceElement="BPMNShape_BsXEAw" targetElement="BPMNShape_Dd2QXw">
+        <di:waypoint x="1235.0" y="80.0"/>
+        <di:waypoint x="1235.0" y="5.0"/>
+        <di:waypoint x="1290.0" y="5.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape bpmnElement="task_bxDTSg" id="BPMNShape_QSg0Zg">
+        <dc:Bounds height="50.0" width="110.0" x="1290.0" y="190.0"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_N2gTbw" id="BPMNEdge_kKQNXA" sourceElement="BPMNShape_BsXEAw" targetElement="BPMNShape_QSg0Zg">
+        <di:waypoint x="1235.0" y="130.0"/>
+        <di:waypoint x="1235.0" y="215.0"/>
+        <di:waypoint x="1290.0" y="215.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape bpmnElement="gateway_yTarNA" id="BPMNShape_0HPoZg">
+        <dc:Bounds height="50.0" width="50.0" x="1430.0" y="80.0"/>
+        <bpmndi:BPMNLabel id="BPMNLabel_JJO2bQ">
+          <dc:Bounds height="20.0" width="100.0" x="1350.0" y="100.0"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_ykmRCQ" id="BPMNEdge_3xS12g" sourceElement="BPMNShape_Dd2QXw" targetElement="BPMNShape_0HPoZg">
+        <di:waypoint x="1400.0" y="5.0"/>
+        <di:waypoint x="1455.0" y="5.0"/>
+        <di:waypoint x="1455.0" y="80.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_ybe5fQ" id="BPMNEdge_nQmOwA" sourceElement="BPMNShape_QSg0Zg" targetElement="BPMNShape_0HPoZg">
+        <di:waypoint x="1400.0" y="215.0"/>
+        <di:waypoint x="1455.0" y="215.0"/>
+        <di:waypoint x="1455.0" y="130.0"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape bpmnElement="event_JZn06A" id="BPMNShape_nyQJog">
+        <dc:Bounds height="36.0" width="36.0" x="1557.0" y="87.0"/>
+        <bpmndi:BPMNLabel id="BPMNLabel_bBftoQ">
+          <dc:Bounds height="20.0" width="100.0" x="1525.0" y="126.0"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="sequenceFlow_qkhVPA" id="BPMNEdge_jJ528A" sourceElement="BPMNShape_0HPoZg" targetElement="BPMNShape_nyQJog">
+        <di:waypoint x="1480.0" y="105.0"/>
+        <di:waypoint x="1557.0" y="105.0"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn2:definitions>
