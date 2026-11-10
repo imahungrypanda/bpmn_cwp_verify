@@ -36,6 +36,130 @@ unsigned int nondet_uint(void);
 NL_NONE = 0
 NL_SINGLE = 1
 NL_DOUBLE = 2
+UNSUPPORTED_BEHAVIOR_KEYWORDS = {
+    "atomic",
+    "break",
+    "d_step",
+    "do",
+    "goto",
+    "od",
+    "printf",
+    "run",
+}
+UPDATE_STATE_DECL = "void updateState(void);"
+
+
+class _BehaviorError(Exception):
+    pass
+
+
+class _BehaviorTranslator:
+    """
+    Translates a task behavior (Promela-style statements: assignments,
+    `assert(...)`, `updateState()`, `skip` and `if :: guard -> ... fi`) into
+    lines of C. Like Promela, an `if` with no true guard blocks, which is
+    modeled with `__CPROVER_assume`; among several true guards one is picked
+    nondeterministically.
+    """
+
+    def __init__(self) -> None:
+        self._items: list[tuple[str, str, list[str]]] = []
+        self._pos = 0
+        self._counter = 0
+        self.uses_update_state = False
+
+    @staticmethod
+    def _statements(text: str) -> list[str]:
+        return [part.strip() for part in text.split(";") if part.strip()]
+
+    def _tokenize(self, behavior: str) -> None:
+        for raw in behavior.split("\n"):
+            line = raw.split("//")[0].strip()
+            if not line:
+                continue
+            if line.startswith("::"):
+                guard, arrow, rest = line[2:].partition("->")
+                if not arrow:
+                    guard, rest = guard, ""
+                self._items.append(
+                    ("opt", " ".join(guard.split()), self._statements(rest))
+                )
+            elif line in ("if", "fi"):
+                self._items.append((line, "", []))
+            else:
+                for stmt in self._statements(line):
+                    self._items.append(("stmt", stmt, []))
+
+    def translate(self, behavior: str) -> list[str]:
+        self._tokenize(behavior)
+        lines = self._block()
+        if self._pos != len(self._items):
+            raise _BehaviorError("unbalanced 'if'/'fi' in behavior")
+        return lines
+
+    def _statement(self, stmt: str) -> list[str]:
+        word = stmt.split("(")[0].split()[0] if stmt.split() else ""
+        if word in UNSUPPORTED_BEHAVIOR_KEYWORDS or stmt.endswith(":"):
+            raise _BehaviorError(f"behavior statement '{stmt}' is not supported")
+        if stmt == "skip":
+            return []
+        if stmt.replace(" ", "") == "updateState()":
+            self.uses_update_state = True
+            return ["updateState();"]
+        return [f"{' '.join(stmt.split())};"]
+
+    def _block(self) -> list[str]:
+        lines: list[str] = []
+        while self._pos < len(self._items):
+            kind, text, _ = self._items[self._pos]
+            if kind in ("fi", "opt"):
+                break
+            self._pos += 1
+            if kind == "if":
+                lines += self._if()
+            else:
+                lines += self._statement(text)
+        return lines
+
+    def _if(self) -> list[str]:
+        options: list[tuple[str, list[str]]] = []
+        while self._pos < len(self._items) and self._items[self._pos][0] == "opt":
+            _, guard, stmts = self._items[self._pos]
+            self._pos += 1
+            body = [line for stmt in stmts for line in self._statement(stmt)]
+            body += self._block()
+            options.append((guard, body))
+        if self._pos >= len(self._items) or self._items[self._pos][0] != "fi":
+            raise _BehaviorError("'if' in behavior is not closed by 'fi'")
+        self._pos += 1
+        if not options:
+            raise _BehaviorError("'if' in behavior has no options")
+
+        n = self._counter
+        self._counter += 1
+        regular = [g for g, _ in options if g != "else"]
+        guards: list[str] = []
+        for guard, _ in options:
+            if guard == "else":
+                others = " || ".join(f"({g})" for g in regular) or "false"
+                guards.append(f"!({others})")
+            else:
+                guards.append(guard)
+
+        lines = ["{"]
+        for i, guard in enumerate(guards):
+            lines.append(f"bool if{n}_guard{i} = ({guard});")
+        lines.append(f"unsigned int if{n}_pick = nondet_uint();")
+        picked = " || ".join(
+            f"(if{n}_pick == {i} && if{n}_guard{i})" for i in range(len(options))
+        )
+        lines.append(f"__CPROVER_assume({picked});")
+        for i, (_, body) in enumerate(options):
+            lines.append(f"if (if{n}_pick == {i}) {{")
+            lines += body
+            lines.append("}")
+        lines.append("}")
+        return lines
 
 
 ##############
@@ -62,6 +186,7 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         "_process_elements",
         "_process_id",
         "_process_init_places",
+        "_update_state_declared",
         "_visited",
         "behaviors",
         "defs",
@@ -86,6 +211,7 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         self._process_id = ""
         self._process_elements: list[str] = []
         self._process_init_places: list[str] = []
+        self._update_state_declared = False
 
     def result(self) -> Result[str, Error]:
         if self.errors:
@@ -215,11 +341,25 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         if task.msg_boundary_events:
             self._unsupported(task, "tasks with boundary events are not supported")
             return True
-        # Placeholder: the task's behavior is not translated yet.
+        translator = _BehaviorTranslator()
+        try:
+            lines = translator.translate(task.behavior)
+        except _BehaviorError as e:
+            self._unsupported(task, str(e))
+            return True
+        if translator.uses_update_state and not self._update_state_declared:
+            self._update_state_declared = True
+            self.behaviors.write_str(UPDATE_STATE_DECL, NL_DOUBLE)
         self.behaviors.write_str(
             f"static void {task.id}_BehaviorModel(void) {{", NL_SINGLE, IndentAction.INC
         )
-        self.behaviors.write_str("/* behavior not modeled */", NL_SINGLE)
+        for line in lines:
+            if line.startswith("}"):
+                self.behaviors.write_str(line, NL_SINGLE, IndentAction.DEC)
+            elif line.endswith("{"):
+                self.behaviors.write_str(line, NL_SINGLE, IndentAction.INC)
+            else:
+                self.behaviors.write_str(line, NL_SINGLE)
         self.behaviors.write_str("}", NL_DOUBLE, IndentAction.DEC)
         self._simple_element(task, extra=f"{task.id}_BehaviorModel();")
         return True
@@ -263,8 +403,23 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         return True
 
     def visit_parallel_gateway(self, gateway: ParallelGatewayNode) -> bool:
-        self._unsupported(gateway, "parallel gateways are not supported")
-        return False
+        if not self._first_visit(gateway):
+            return True
+        if gateway.in_msgs or gateway.out_msgs:
+            self._unsupported(gateway, "gateways cannot have message flows")
+            return True
+        if not gateway.out_flows:
+            self._unsupported(gateway, "parallel gateways need an outgoing flow")
+            return True
+
+        # A fork has one incoming flow and starts every outgoing branch; a join
+        # waits for a token on every incoming flow. Both are the same rule:
+        # consume from all incoming flows, put on all outgoing flows.
+        self._declare_places(gateway)
+        seq, _ = self._in_places(gateway)
+        guard = " && ".join(f"hasToken({p})" for p in seq)
+        self._write_step(gateway, self._consume_and_put(gateway), guard=f"({guard})")
+        return True
 
     def visit_message_flow(self, flow: MessageFlow) -> bool:
         # Message flows are modeled by the token places of the sending and
