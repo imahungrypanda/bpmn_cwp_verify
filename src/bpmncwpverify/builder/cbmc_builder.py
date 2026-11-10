@@ -1,3 +1,5 @@
+import re
+
 from returns.result import Failure, Result, Success
 
 from bpmncwpverify.builder.cbmc_bound import compute_unwind_bound
@@ -74,7 +76,21 @@ def _generate_main(process_ids: list[str]) -> str:
     return str(main)
 
 
-def _generate_c(state: State, cwp: Cwp, bpmn: Bpmn) -> Result[str, Error]:
+_STATE_ASSIGN = re.compile(r"^(\t+)(\w+) = \2_prime;$", re.MULTILINE)
+
+
+def _add_state_coverage(cwp_c: str) -> str:
+    """
+    Marks every point where `updateState` makes a CWP state active with a
+    `__CPROVER_cover`, so a run with `--cover cover` shows which states are
+    never entered.
+    """
+    return _STATE_ASSIGN.sub(r"\g<0>\n\1__CPROVER_cover(\2);", cwp_c)
+
+
+def _generate_c(
+    state: State, cwp: Cwp, bpmn: Bpmn, state_coverage: bool = False
+) -> Result[str, Error]:
     if not bpmn.processes:
         return Failure(CbmcBuildError("the BPMN has no processes"))
 
@@ -86,11 +102,14 @@ def _generate_c(state: State, cwp: Cwp, bpmn: Bpmn) -> Result[str, Error]:
 
     cwp_visitor = CwpCbmcVisitor()
     cwp.accept(cwp_visitor)
+    cwp_c = str(cwp_visitor)
+    if state_coverage:
+        cwp_c = _add_state_coverage(cwp_c)
 
     bound = compute_unwind_bound(bpmn)
     header = f"#include <assert.h>\n#include <stdbool.h>\n\n#define {UNWIND_MACRO} {bound}\n\n"
     return Success(
-        f"{header}{_generate_state_c(state)}{cwp_visitor}{bpmn_c.unwrap()}"
+        f"{header}{_generate_state_c(state)}{cwp_c}{bpmn_c.unwrap()}"
         f"{_generate_main(bpmn_visitor.process_ids)}"
     )
 
@@ -100,6 +119,7 @@ class CbmcBuilder:
         "bpmn",
         "cwp",
         "state",
+        "state_coverage",
     ]
 
     def __init__(self) -> None:
@@ -110,12 +130,13 @@ class CbmcBuilder:
         self.state: Result[State, Error] = Failure(
             NotInitializedError("CbmcBuilder.state")
         )
+        self.state_coverage: bool = False
 
     def build(self) -> Result[str, Error]:
         result: Result[str, Error] = self.state.bind(  # pyright: ignore[reportUnknownMemberType]
             lambda state: self.cwp.bind(  # pyright: ignore[reportUnknownMemberType]
                 lambda cwp: self.bpmn.bind(  # pyright: ignore[reportUnknownMemberType]
-                    lambda bpmn: _generate_c(state, cwp, bpmn)
+                    lambda bpmn: _generate_c(state, cwp, bpmn, self.state_coverage)
                 )
             )
         )
@@ -139,4 +160,8 @@ class CbmcBuilder:
 
     def with_state(self, state: State) -> "CbmcBuilder":
         self.state = Success(state)
+        return self
+
+    def with_state_coverage(self, state_coverage: bool) -> "CbmcBuilder":
+        self.state_coverage = state_coverage
         return self

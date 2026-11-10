@@ -224,6 +224,30 @@ class CbmcBuildError(Error):
         self.reason = reason
 
 
+class CbmcAssertionError(Error):
+    __slots__ = ["failures"]
+
+    def __init__(self, failures: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.failures = failures
+
+
+class CbmcRunError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class CbmcUnreachableStateError(Error):
+    __slots__ = ["states"]
+
+    def __init__(self, states: list[str]) -> None:
+        super().__init__()
+        self.states = states
+
+
 class CwpEdgeNoParentExprError(Error):
     __slots__ = ["edge"]
 
@@ -685,6 +709,16 @@ def get_error_message(error: Error) -> str:
             )
         case CbmcBuildError(reason=reason):
             return f"CBMC ERROR: unable to build C program: {reason}"
+        case CbmcAssertionError(failures=failures):
+            details = "; ".join(
+                f"{f['assertion']} (line {f['line']}, {f['function']})"
+                for f in failures
+            )
+            return f"CBMC ERROR: assertion failed: {details}"
+        case CbmcRunError(reason=reason):
+            return f"CBMC ERROR: unable to run cbmc: {reason}"
+        case CbmcUnreachableStateError(states=states):
+            return f"CBMC ERROR: CWP state(s) never reached by the workflow: {', '.join(states)}"
         case BpmnUnrecognizedElement(element_name=element_name):
             return f"BPMN ERROR: Unrecognized bpmn element type in workflow: {element_name}"
         case CwpEdgeNoParentExprError(edge=edge):
