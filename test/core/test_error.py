@@ -51,7 +51,13 @@ from bpmncwpverify.core.error import (
     ExpressionRelationalNotError,
     ExpressionRelationCompatabilityError,
     ExpressionUnrecognizedID,
+    FeelAssignTargetError,
+    FeelConditionTypeError,
+    FeelListTypeError,
+    FeelNotAValueError,
+    FeelOperatorTypeError,
     FeelParseError,
+    FeelUnknownNameError,
     FeelUnsupportedError,
     FileReadFileError,
     FileWriteFileError,
@@ -342,6 +348,30 @@ test_inputs: list[tuple[Error, str]] = [
     ),
     (SubProcessRunError("proc"), "ERROR: failed to run 'proc'"),
     (TypingNoTypeError("a"), "TYPING ERROR: literal 'a' has an unknown type"),
+    (
+        FeelUnknownNameError("q"),
+        "FEEL TYPING ERROR: 'q' is not a variable, constant or enum value in the state",
+    ),
+    (
+        FeelNotAValueError("Color"),
+        "FEEL TYPING ERROR: 'Color' is an enum type, not a value",
+    ),
+    (
+        FeelOperatorTypeError("+", ("bool", "int")),
+        "FEEL TYPING ERROR: '+' cannot be applied to operands of type 'bool', 'int'",
+    ),
+    (
+        FeelConditionTypeError("int"),
+        "FEEL TYPING ERROR: a condition must be a bool, but this is of type 'int'",
+    ),
+    (
+        FeelListTypeError("a list", "it is empty"),
+        "FEEL TYPING ERROR: in a list: it is empty",
+    ),
+    (
+        FeelAssignTargetError("c"),
+        "FEEL TYPING ERROR: 'c' cannot be assigned to; only state variables can",
+    ),
 ]
 
 test_ids: list[str] = [
@@ -412,6 +442,12 @@ test_ids: list[str] = [
     "SubprocessRunError",
     "TypeingAssignCompatabilityError",
     "TypingNoTypeError",
+    "FeelUnknownNameError",
+    "FeelNotAValueError",
+    "FeelOperatorTypeError",
+    "FeelConditionTypeError",
+    "FeelListTypeError",
+    "FeelAssignTargetError",
 ]
 
 

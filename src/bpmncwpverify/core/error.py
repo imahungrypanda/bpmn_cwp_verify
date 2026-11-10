@@ -428,6 +428,56 @@ class FeelUnsupportedError(Error):
         self.text = text
 
 
+class FeelUnknownNameError(Error):
+    __slots__ = ["name"]
+
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.name = name
+
+
+class FeelNotAValueError(Error):
+    __slots__ = ["name"]
+
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.name = name
+
+
+class FeelOperatorTypeError(Error):
+    __slots__ = ["op", "operand_types"]
+
+    def __init__(self, op: str, operand_types: tuple[str, ...]) -> None:
+        super().__init__()
+        self.op = op
+        self.operand_types = operand_types
+
+
+class FeelConditionTypeError(Error):
+    __slots__ = ["expr_type"]
+
+    def __init__(self, expr_type: str) -> None:
+        super().__init__()
+        self.expr_type = expr_type
+
+
+class FeelListTypeError(Error):
+    __slots__ = ["construct", "detail"]
+
+    def __init__(self, construct: str, detail: str) -> None:
+        super().__init__()
+        self.construct = construct
+        self.detail = detail
+
+
+class FeelAssignTargetError(Error):
+    __slots__ = ["name"]
+
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.name = name
+
+
 class FlowExpressionError(Error):
     __slots__ = ["flow_id", "expression", "exception_str"]
 
@@ -782,6 +832,18 @@ def get_error_message(error: Error) -> str:
             return (
                 f"FEEL error: {construct} is not supported by this tool (in '{text}')"
             )
+        case FeelUnknownNameError(name=name):
+            return f"FEEL TYPING ERROR: '{name}' is not a variable, constant or enum value in the state"
+        case FeelNotAValueError(name=name):
+            return f"FEEL TYPING ERROR: '{name}' is an enum type, not a value"
+        case FeelOperatorTypeError(op=op, operand_types=operand_types):
+            return f"FEEL TYPING ERROR: '{op}' cannot be applied to operands of type {', '.join(repr(t) for t in operand_types)}"
+        case FeelConditionTypeError(expr_type=expr_type):
+            return f"FEEL TYPING ERROR: a condition must be a bool, but this is of type '{expr_type}'"
+        case FeelListTypeError(construct=construct, detail=detail):
+            return f"FEEL TYPING ERROR: in {construct}: {detail}"
+        case FeelAssignTargetError(name=name):
+            return f"FEEL TYPING ERROR: '{name}' cannot be assigned to; only state variables can"
         case FlowExpressionError(
             flow_id=flow_id, expression=expression, exception_str=exception_str
         ):
