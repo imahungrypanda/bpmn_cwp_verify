@@ -187,15 +187,192 @@ def test_gateway_flow_without_expression_is_an_error():
     assert isinstance(visitor.result(), Failure)
 
 
-def test_parallel_gateway_is_an_error():
+def fork_join() -> Bpmn:
+    s, f, a, b, j, e = (
+        start(),
+        ParallelGatewayNode("F", "F"),
+        Task("A", "A", ""),
+        Task("B", "B", ""),
+        ParallelGatewayNode("J", "J"),
+        end(),
+    )
+    seq(s, f)
+    seq(f, a)
+    seq(f, b)
+    seq(a, j)
+    seq(b, j)
+    seq(j, e)
+    return make_bpmn(("P", [s, f, a, b, j, e]))
+
+
+def test_parallel_fork_and_join():
+    visitor = generate(fork_join())
+    code = repr(visitor)
+    assert visitor.errors == []
+    assert "if (!((hasToken(F_FROM_S)))) return false;" in code
+    assert "putToken(A_FROM_F);" in code
+    assert "putToken(B_FROM_F);" in code
+    assert "if (!((hasToken(J_FROM_A) && hasToken(J_FROM_B)))) return false;" in code
+    assert "consumeToken(J_FROM_A);" in code
+    assert "consumeToken(J_FROM_B);" in code
+    assert "putToken(E_FROM_J);" in code
+    assert code.count("static bool J_step(void)") == 1
+
+
+def test_nested_parallel_gateways():
+    s, f1, f2, a, b, c, j2, j1, e = (
+        start(),
+        ParallelGatewayNode("F1", "F1"),
+        ParallelGatewayNode("F2", "F2"),
+        Task("A", "A", ""),
+        Task("B", "B", ""),
+        Task("C", "C", ""),
+        ParallelGatewayNode("J2", "J2"),
+        ParallelGatewayNode("J1", "J1"),
+        end(),
+    )
+    seq(s, f1)
+    seq(f1, f2)
+    seq(f1, c)
+    seq(f2, a)
+    seq(f2, b)
+    seq(a, j2)
+    seq(b, j2)
+    seq(j2, j1)
+    seq(c, j1)
+    seq(j1, e)
+    visitor = generate(make_bpmn(("P", [s, f1, f2, a, b, c, j2, j1, e])))
+    code = repr(visitor)
+    assert visitor.errors == []
+    assert "putToken(F2_FROM_F1);" in code
+    assert "putToken(C_FROM_F1);" in code
+    assert "hasToken(J2_FROM_A) && hasToken(J2_FROM_B)" in code
+    assert "hasToken(J1_FROM_J2) && hasToken(J1_FROM_C)" in code
+
+
+def test_parallel_gateway_with_message_is_an_error():
     s, p, e = start(), ParallelGatewayNode("PG", "PG"), end()
     seq(s, p)
     seq(p, e)
-    visitor = generate(make_bpmn(("P", [s, p, e])))
-    assert len(visitor.errors) == 1
+    o, oe = start("O"), end("OE")
+    seq(o, oe)
+    msg(o, p)
+    visitor = generate(make_bpmn(("P", [s, p, e]), ("Q", [o, oe])))
     error = visitor.result().failure()
     assert isinstance(error, BpmnCbmcUnsupportedElementError)
     assert error.element_id == "PG"
+
+
+def behavior_code(behavior: str):
+    s, t, e = start(), Task("T", "T", behavior), end()
+    seq(s, t)
+    seq(t, e)
+    visitor = generate(make_bpmn(("P", [s, t, e])))
+    return visitor, repr(visitor.behaviors)
+
+
+def test_behavior_assignments():
+    visitor, code = behavior_code("x = 1\ny = x + 2; z = y\nskip\nupdateState()")
+    assert visitor.errors == []
+    assert "x = 1;" in code
+    assert "y = x + 2;" in code
+    assert "z = y;" in code
+    assert "skip" not in code
+    assert "updateState();" in code
+    assert "void updateState(void);" in code
+
+
+def test_empty_behavior():
+    visitor, code = behavior_code("")
+    assert visitor.errors == []
+    assert "static void T_BehaviorModel(void) {" in code
+    assert "updateState" not in code
+
+
+def test_behavior_assert_and_comparison():
+    _, code = behavior_code("assert(x != y)\nassert(x == 1 || y >= 2)")
+    assert "assert(x != y);" in code
+    assert "assert(x == 1 || y >= 2);" in code
+
+
+def test_behavior_if_with_guards_and_else():
+    visitor, code = behavior_code(
+        "if\n"
+        ":: x == a -> y = b\n"
+        ":: (x != a) && (y == b) -> y = a; x = b\n"
+        ":: else -> skip\n"
+        "fi\n"
+        "updateState()"
+    )
+    assert visitor.errors == []
+    assert "bool if0_guard0 = (x == a);" in code
+    assert "bool if0_guard1 = ((x != a) && (y == b));" in code
+    assert "bool if0_guard2 = (!((x == a) || ((x != a) && (y == b))));" in code
+    assert "__CPROVER_assume(" in code
+    assert "if (if0_pick == 0) {" in code
+    assert "y = b;" in code
+    assert "x = b;" in code
+    assert code.index("}") < code.index("updateState();")
+
+
+def test_behavior_nested_if_and_true_guard():
+    visitor, code = behavior_code(
+        "if\n:: true ->\n  if\n  :: x == 1 -> y = 2\n  :: else -> y = 3\n  fi\nfi"
+    )
+    assert visitor.errors == []
+    assert "bool if1_guard0 = (true);" in code
+    assert "bool if0_guard0 = (x == 1);" in code
+    assert "y = 3;" in code
+
+
+@pytest.mark.parametrize(
+    "behavior", ["if\n:: true -> x = 1", "fi", "do\n:: x = 1\nod", "goto end"]
+)
+def test_unsupported_behavior_is_an_error(behavior):
+    visitor, _ = behavior_code(behavior)
+    error = visitor.result().failure()
+    assert isinstance(error, BpmnCbmcUnsupportedElementError)
+    assert error.element_id == "T"
+
+
+@pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc not installed")
+def test_fork_join_and_behaviors_in_cbmc(tmp_path):
+    s, f, a, b, j, e = (
+        start(),
+        ParallelGatewayNode("F", "F"),
+        Task("A", "A", "x = x + 1"),
+        Task("B", "B", "if\n:: x == 0 -> y = 5\n:: else -> y = 7\nfi"),
+        ParallelGatewayNode("J", "J"),
+        end(),
+    )
+    seq(s, f)
+    seq(f, a)
+    seq(f, b)
+    seq(a, j)
+    seq(b, j)
+    seq(j, e)
+    code = repr(generate(make_bpmn(("P", [s, f, a, b, j, e]))))
+    harness = (
+        "int x = 0;\nint y = 0;\n"
+        f"{code}"
+        "int main(void) {\n"
+        "\tP_init();\n"
+        "\tfor (int i = 0; i < 8; i++) P_step();\n"
+        "\tassert(P_done);\n"
+        "\tassert(x == 1);\n"
+        "\tassert(y == 5 || y == 7);\n"
+        "\treturn 0;\n"
+        "}\n"
+    )
+    path = tmp_path / "model.c"
+    path.write_text(harness)
+    run = subprocess.run(
+        ["cbmc", str(path), "--unwind", "9"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert "VERIFICATION SUCCESSFUL" in run.stdout, run.stdout
 
 
 def test_boundary_event_is_an_error():
