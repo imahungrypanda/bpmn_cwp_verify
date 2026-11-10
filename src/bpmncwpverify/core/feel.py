@@ -15,7 +15,12 @@ from bpmncwpverify.antlr.FeelExprParser import (
     FeelExprParser,
 )
 from bpmncwpverify.antlr.FeelExprVisitor import FeelExprVisitor
-from bpmncwpverify.core.error import Error, FeelParseError, FeelUnsupportedError
+from bpmncwpverify.core.error import (
+    Error,
+    FeelConditionTypeError,
+    FeelParseError,
+    FeelUnsupportedError,
+)
 from bpmncwpverify.core.expr import ThrowingErrorListener
 from bpmncwpverify.core.feel_tree import (
     Behavior,
@@ -31,6 +36,7 @@ from bpmncwpverify.core.feel_tree import (
     Number,
     Triple,
 )
+from bpmncwpverify.core.state import State
 
 
 class _Unsupported(Exception):
@@ -173,3 +179,19 @@ def parse_expression(text: str) -> Result[FeelNode, Error]:
 def parse_behavior(text: str) -> Result[Behavior, Error]:
     """Parse a task behavior: a triple, or triples separated by commas."""
     return _parse(text, "behavior")  # type: ignore[return-value]
+
+
+def type_check(node: FeelNode, state: State) -> Result[FeelNode, Error]:
+    """
+    Type check a parsed behavior or condition against the state, which must
+    itself have been type checked. A behavior must have well-typed triples;
+    anything else is a condition and must be a bool.
+    """
+    from bpmncwpverify.visitors.feel_typechecker_visitor import type_of
+
+    typed = type_of(node, state)
+    if isinstance(typed, Failure):
+        return typed
+    if not isinstance(node, Behavior | Triple) and typed.unwrap() != "bool":
+        return Failure(FeelConditionTypeError(typed.unwrap()))
+    return Success(node)
