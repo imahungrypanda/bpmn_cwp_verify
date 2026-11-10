@@ -411,6 +411,23 @@ class FileXmlParseError(Error):
         self.msg = msg
 
 
+class FeelParseError(Error):
+    __slots__ = ["exception_str"]
+
+    def __init__(self, exception_str: str) -> None:
+        super().__init__()
+        self.exception_str = exception_str
+
+
+class FeelUnsupportedError(Error):
+    __slots__ = ["construct", "text"]
+
+    def __init__(self, construct: str, text: str) -> None:
+        super().__init__()
+        self.construct = construct
+        self.text = text
+
+
 class FlowExpressionError(Error):
     __slots__ = ["flow_id", "expression", "exception_str"]
 
@@ -759,6 +776,12 @@ def get_error_message(error: Error) -> str:
             return f"FILE ERROR: '{msg}'"
         case FileXmlParseError(msg=msg):
             return f"FILE ERROR: '{msg}'"
+        case FeelParseError(exception_str=exception_str):
+            return f"FEEL syntax error: {exception_str}"
+        case FeelUnsupportedError(construct=construct, text=text):
+            return (
+                f"FEEL error: {construct} is not supported by this tool (in '{text}')"
+            )
         case FlowExpressionError(
             flow_id=flow_id, expression=expression, exception_str=exception_str
         ):
