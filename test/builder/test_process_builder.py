@@ -91,22 +91,18 @@ def test_build_graph_with_expression_checker(mocker):
     }[key]
 
     mock_state = mocker.MagicMock(spec=State)
-    mock_feel = mocker.MagicMock()
-    mock_feel.type_check.return_value = Success("bool")
-
-    mock_parse = mocker.patch(
-        "bpmncwpverify.builder.process_builder.Feel.parse",
-        return_value=mock_feel,
+    mock_type_check = mocker.patch(
+        "bpmncwpverify.core.expr.ExpressionListener.type_check",
+        return_value=Success("bool"),
     )
 
-    builder = ProcessBuilder("test_id", "test_name", mock_state)
+    builder = ProcessBuilder(mocker.Mock(), mocker.Mock, mock_state)
     builder._process = mock_process
 
     builder.with_process_flow("flow_1", "node_1", "node_2", "clean_expression")
 
-    mock_parse.assert_called_once_with("clean_expression")
-    mock_feel.type_check.assert_called_once_with(mock_state)
-    assert flow_1.expression is mock_feel
+    mock_type_check.assert_called_once_with("clean_expression", mock_state)
+    assert flow_1.expression == "clean_expression"
 
 
 @pytest.fixture

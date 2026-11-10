@@ -1,215 +1,197 @@
-from typing import Protocol, cast
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
+"""
+Parses FEEL text into the syntax tree in ``feel_tree``.
+"""
 
-from antlr4 import CommonTokenStream, InputStream, ParseTreeWalker
+from typing import Any, NoReturn
+
+from antlr4 import CommonTokenStream, InputStream
+from antlr4.error.ErrorListener import ConsoleErrorListener
+from antlr4.error.ErrorStrategy import ParseCancellationException
 from returns.result import Failure, Result, Success
 
 from bpmncwpverify.antlr.FeelExprLexer import FeelExprLexer
-from bpmncwpverify.antlr.FeelExprListener import FeelExprListener
-from bpmncwpverify.antlr.FeelExprParser import FeelExprParser  # type: ignore
-from bpmncwpverify.core.error import Error, ErrorException
+from bpmncwpverify.antlr.FeelExprParser import (
+    FeelExprParser,
+)
+from bpmncwpverify.antlr.FeelExprVisitor import FeelExprVisitor
+from bpmncwpverify.core.error import (
+    Error,
+    FeelConditionTypeError,
+    FeelParseError,
+    FeelUnsupportedError,
+)
+from bpmncwpverify.core.expr import ThrowingErrorListener
 from bpmncwpverify.core.feel_tree import (
-    AddNode,
-    AndNode,
-    BoolLiteralNode,
-    ChooseNode,
-    DivideNode,
-    EqualNode,
-    ExpressionNode,
-    GENode,
-    GTNode,
-    IfNode,
-    LENode,
-    ListNode,
-    LTNode,
-    MultiplyNode,
-    NotEqualNode,
-    NotNode,
-    NumberLiteralNode,
-    OrNode,
-    PowerNode,
-    QualifiedNameNode,
-    SubtractNode,
-    TripleListNode,
-    TripleNode,
-    XOrNode,
+    Behavior,
+    Binary,
+    Boolean,
+    Choose,
+    FeelNode,
+    If,
+    ListExpr,
+    Name,
+    Negate,
+    Not,
+    Number,
+    Triple,
 )
 from bpmncwpverify.core.state import State
-from bpmncwpverify.visitors.feel_typechecker_visitor import TypeCheckerVisitor
 
 
-class HasText(Protocol):
-    def getText(self) -> str | None: ...
+class _Unsupported(Exception):
+    def __init__(self, construct: str, ctx: Any) -> None:
+        super().__init__(construct)
+        self.construct = construct
+        self.text: str = ctx.getText()
 
 
-class Feel:
-    __slots__ = ["ast"]
+def _unsupported(construct: str) -> Any:
+    def visit(self: Any, ctx: Any) -> NoReturn:
+        raise _Unsupported(construct, ctx)
 
-    def __init__(self, ast: ExpressionNode) -> None:
-        self.ast = ast
+    return visit
 
-    @classmethod
-    def parse(cls, text: str) -> "Feel":
-        lexer = FeelExprLexer(InputStream(text))
-        stream = CommonTokenStream(lexer)
-        parser = FeelExprParser(stream)
 
-        tree = parser.compilation_unit()
+class _TreeBuilder(FeelExprVisitor):
+    def visitStart(self, ctx: Any) -> FeelNode:
+        return self.visit(ctx.expr())  # type: ignore[no-any-return]
 
-        listener = cls._Listener()
-        ParseTreeWalker().walk(listener, tree)
+    def visitBehavior(self, ctx: Any) -> Behavior:
+        return Behavior(tuple(self.visit(t) for t in ctx.triple()))
 
-        return cls(cast(ExpressionNode, listener.ast))
+    def visitTriple(self, ctx: Any) -> Triple:
+        return Triple(
+            self.visit(ctx.name()),
+            self.visit(ctx.nameList()),
+            self.visit(ctx.expr()),
+        )
 
-    def type_check(self, state: State) -> Result[str, Error]:
-        typechecker = TypeCheckerVisitor(state)
+    def visitNameList(self, ctx: Any) -> tuple[Name, ...]:
+        return tuple(self.visit(n) for n in ctx.name())
 
-        try:
-            self.ast.accept(typechecker)
-        except ErrorException as e:
-            return Failure(e.error)
+    def visitName(self, ctx: Any) -> Name:
+        return Name(ctx.getText())
 
-        return Success(typechecker.stack.pop())
+    def visitIf(self, ctx: Any) -> If:
+        cond, then_branch, else_branch = (self.visit(e) for e in ctx.expr())
+        return If(cond, then_branch, else_branch)
 
-    class _Listener(FeelExprListener):
-        def __init__(self) -> None:
-            super().__init__()
-            self.stack: list[ExpressionNode] = []
-            self.ast: ExpressionNode | None = None
+    def _binary(self, ctx: Any, op: str) -> Binary:
+        left, right = (self.visit(c) for c in ctx.getChildren() if _is_rule(c))
+        return Binary(op, left, right)
 
-        def exitCompilation_unit(
-            self, ctx: FeelExprParser.Compilation_unitContext
-        ) -> None:
-            assert len(self.stack) == 1
-            self.ast = self.stack.pop()
+    def visitOr(self, ctx: Any) -> Binary:
+        return self._binary(ctx, "or")
 
-        def exitNumberLiteral(self, ctx: FeelExprParser.NumberLiteralContext) -> None:
-            self.stack.append(NumberLiteralNode(ctx.getText()))
+    def visitXor(self, ctx: Any) -> Binary:
+        return self._binary(ctx, "xor")
 
-        def exitBoolLiteral(self, ctx: FeelExprParser.BoolLiteralContext) -> None:
-            self.stack.append(BoolLiteralNode(ctx.getText()))
+    def visitAnd(self, ctx: Any) -> Binary:
+        return self._binary(ctx, "and")
 
-        def exitQualifiedName(self, ctx: FeelExprParser.QualifiedNameContext) -> None:
-            self.stack.append(QualifiedNameNode(ctx.getText()))
+    def visitNot(self, ctx: Any) -> Not:
+        return Not(self.visit(ctx.notExpr()))
 
-        def exitAddExpression(self, ctx: FeelExprParser.AddExpressionContext) -> None:
-            right = self.stack.pop()
-            left = self.stack.pop()
+    def visitRelational(self, ctx: Any) -> Binary:
+        return self._binary(ctx, ctx.op.text)
 
-            if ctx.ADD():
-                self.stack.append(AddNode(left, right))
-            else:
-                self.stack.append(SubtractNode(left, right))
+    def visitAddSub(self, ctx: Any) -> Binary:
+        return self._binary(ctx, ctx.op.text)
 
-        def exitMultExpression(self, ctx: FeelExprParser.MultExpressionContext) -> None:
-            right = self.stack.pop()
-            left = self.stack.pop()
+    def visitMulDiv(self, ctx: Any) -> Binary:
+        return self._binary(ctx, ctx.op.text)
 
-            if ctx.MUL():
-                self.stack.append(MultiplyNode(left, right))
-            else:
-                self.stack.append(DivideNode(left, right))
+    def visitPow(self, ctx: Any) -> Binary:
+        return self._binary(ctx, "**")
 
-        def exitPowExpression(self, ctx: FeelExprParser.PowExpressionContext) -> None:
-            right = self.stack.pop()
-            left = self.stack.pop()
+    def visitNegate(self, ctx: Any) -> Negate:
+        return Negate(self.visit(ctx.unaryExpr()))
 
-            self.stack.append(PowerNode(left, right))
+    def visitNumber(self, ctx: Any) -> Number:
+        text = ctx.getText()
+        return Number(float(text) if "." in text else int(text))
 
-        def exitCompExpression(self, ctx: FeelExprParser.CompExpressionContext) -> None:
-            right = self.stack.pop()
-            left = self.stack.pop()
+    def visitTrue(self, ctx: Any) -> Boolean:
+        return Boolean(True)
 
-            if ctx.LT():
-                self.stack.append(LTNode(left, right))
-            elif ctx.GT():
-                self.stack.append(GTNode(left, right))
-            elif ctx.LE():
-                self.stack.append(LENode(left, right))
-            elif ctx.GE():
-                self.stack.append(GENode(left, right))
-            elif ctx.EQUAL():
-                self.stack.append(EqualNode(left, right))
-            elif ctx.NOTEQUAL():
-                self.stack.append(NotEqualNode(left, right))
+    def visitFalse(self, ctx: Any) -> Boolean:
+        return Boolean(False)
 
-        def exitCondAnd(self, ctx: FeelExprParser.CondAndContext) -> None:
-            right = self.stack.pop()
-            left = self.stack.pop()
+    def visitRef(self, ctx: Any) -> Name:
+        return self.visit(ctx.name())  # type: ignore[no-any-return]
 
-            self.stack.append(AndNode(left, right))
+    def visitList(self, ctx: Any) -> tuple[FeelNode, ...]:
+        return tuple(self.visit(e) for e in ctx.expr())
 
-        def exitCondXOr(self, ctx: FeelExprParser.CondXOrContext) -> None:
-            right = self.stack.pop()
-            left = self.stack.pop()
+    def visitListLit(self, ctx: Any) -> ListExpr:
+        return ListExpr(self.visit(ctx.list_()))
 
-            self.stack.append(XOrNode(left, right))
+    def visitChoose(self, ctx: Any) -> Choose:
+        return Choose(self.visit(ctx.list_()))
 
-        def exitCondOr(self, ctx: FeelExprParser.CondOrContext) -> None:
-            right = self.stack.pop()
-            left = self.stack.pop()
+    def visitParens(self, ctx: Any) -> FeelNode:
+        return self.visit(ctx.expr())  # type: ignore[no-any-return]
 
-            self.stack.append(OrNode(left, right))
+    visitFor = _unsupported("a 'for' expression")
+    visitQuantified = _unsupported("a 'some' or 'every' expression")
+    visitBetween = _unsupported("'between'")
+    visitInTest = _unsupported("'in'")
+    visitFilter = _unsupported("a filter expression")
+    visitString = _unsupported("a string")
+    visitNull = _unsupported("'null'")
+    visitDateLiteral = _unsupported("a date or time literal")
+    visitCall = _unsupported("a function call")
+    visitFunctionDef = _unsupported("a function definition")
+    visitContext = _unsupported("a context")
+    visitInterval = _unsupported("an interval")
 
-        def exitPrimaryIfExpression(
-            self, ctx: FeelExprParser.PrimaryIfExpressionContext
-        ) -> None:
-            elsedo = self.stack.pop()
-            thendo = self.stack.pop()
-            condition = self.stack.pop()
 
-            self.stack.append(IfNode(condition, thendo, elsedo))
+def _is_rule(child: Any) -> bool:
+    return hasattr(child, "getRuleIndex")
 
-        def exitFnInvocation(self, ctx: FeelExprParser.FnInvocationContext) -> None:
-            argument = self.stack.pop()
-            function = self.stack.pop()
 
-            if isinstance(function, QualifiedNameNode) and function.name == "not":
-                self.stack.append(NotNode(argument))
-            else:
-                self.stack.append(function)
-                self.stack.append(argument)
+def _get_parser(text: str) -> FeelExprParser:
+    lexer = FeelExprLexer(InputStream(text))
+    lexer.removeErrorListener(ConsoleErrorListener.INSTANCE)
+    lexer.addErrorListener(ThrowingErrorListener())
+    parser = FeelExprParser(CommonTokenStream(lexer))
+    parser.removeErrorListener(ConsoleErrorListener.INSTANCE)
+    parser.addErrorListener(ThrowingErrorListener())
+    return parser
 
-        def exitPrimaryList(self, ctx: FeelExprParser.PrimaryListContext) -> None:
-            pass
 
-        def exitList(self, ctx: FeelExprParser.ListContext) -> None:
-            if ctx.expressionList() is None:
-                self.stack.append(ListNode([]))
+def _parse(text: str, entry: str) -> Result[FeelNode, Error]:
+    try:
+        parser = _get_parser(text)
+        return Success(_TreeBuilder().visit(getattr(parser, entry)()))
+    except ParseCancellationException as exception:
+        return Failure(FeelParseError(str(exception)))
+    except _Unsupported as unsupported:
+        return Failure(FeelUnsupportedError(unsupported.construct, unsupported.text))
 
-        def exitExpressionList(self, ctx: FeelExprParser.ExpressionListContext) -> None:
-            expressions = ctx.getTypedRuleContexts(FeelExprParser.ExpressionContext)
 
-            values: list[ExpressionNode] = []
+def parse_expression(text: str) -> Result[FeelNode, Error]:
+    """Parse a FEEL expression, such as a flow or edge condition."""
+    return _parse(text, "start")
 
-            for _ in expressions:
-                values.append(self.stack.pop())
 
-            values.reverse()
+def parse_behavior(text: str) -> Result[Behavior, Error]:
+    """Parse a task behavior: a triple, or triples separated by commas."""
+    return _parse(text, "behavior")  # type: ignore[return-value]
 
-            self.stack.append(ListNode(values))
 
-        def exitChooseExpression(
-            self, ctx: FeelExprParser.ChooseExpressionContext
-        ) -> None:
-            contents = cast(ListNode, self.stack.pop())
+def type_check(node: FeelNode, state: State) -> Result[FeelNode, Error]:
+    """
+    Type check a parsed behavior or condition against the state, which must
+    itself have been type checked. A behavior must have well-typed triples;
+    anything else is a condition and must be a bool.
+    """
+    from bpmncwpverify.visitors.feel_typechecker_visitor import type_of
 
-            self.stack.append(ChooseNode(contents))
-
-        def exitTripExpression(self, ctx: FeelExprParser.TripExpressionContext) -> None:
-            value = self.stack.pop()
-            inputs = cast(ListNode, self.stack.pop())
-            target = self.stack.pop()
-
-            self.stack.append(TripleNode(target, inputs, value))
-
-        def exitTripleList(self, ctx: FeelExprParser.TripleListContext) -> None:
-            triples = ctx.getTypedRuleContexts(FeelExprParser.TripleExpressionContext)
-
-            values: list[TripleNode] = []
-
-            for _ in triples:
-                values.append(cast(TripleNode, self.stack.pop()))
-
-            values.reverse()
-
-            self.stack.append(TripleListNode(values))
+    typed = type_of(node, state)
+    if isinstance(typed, Failure):
+        return typed
+    if not isinstance(node, Behavior | Triple) and typed.unwrap() != "bool":
+        return Failure(FeelConditionTypeError(typed.unwrap()))
+    return Success(node)

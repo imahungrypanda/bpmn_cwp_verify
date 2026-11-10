@@ -38,14 +38,14 @@
     <bpmn2:sequenceFlow id="sequenceFlow_riNFgg" sourceRef="task_MWMokA" targetRef="gateway_K0OuHg">
       <bpmn2:documentation id="documentation_iRGoWg"/>
     </bpmn2:sequenceFlow>
-    <bpmn2:sequenceFlow id="sequenceFlow_RqrzQg" name="x &lt;= 5" sourceRef="gateway_K0OuHg" targetRef="task_MWMokA">
+    <bpmn2:sequenceFlow id="sequenceFlow_RqrzQg" name="not (x &gt; 5)" sourceRef="gateway_K0OuHg" targetRef="task_MWMokA">
       <bpmn2:documentation id="documentation_ryxcow"/>
     </bpmn2:sequenceFlow>
     <bpmn2:endEvent id="event_JS1LAA" name="End">
       <bpmn2:documentation id="documentation_pNDJyA"/>
       <bpmn2:incoming>sequenceFlow_A5qFbA</bpmn2:incoming>
     </bpmn2:endEvent>
-    <bpmn2:sequenceFlow id="sequenceFlow_A5qFbA" name="x &gt; 5" sourceRef="gateway_K0OuHg" targetRef="event_JS1LAA">
+    <bpmn2:sequenceFlow id="sequenceFlow_A5qFbA" name="x &gt; 5 and true" sourceRef="gateway_K0OuHg" targetRef="event_JS1LAA">
       <bpmn2:documentation id="documentation_7lcArA"/>
     </bpmn2:sequenceFlow>
   </bpmn2:process>

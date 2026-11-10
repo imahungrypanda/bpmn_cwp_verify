@@ -1,161 +1,179 @@
 """
-cbmc_bound.py — CBMC loop-bound computation from a BPMN graph.
+Unwinding bound for CBMC.
 
-Computes the minimum unwind depth needed for CBMC to cover all execution paths:
+The bound returned by `compute_unwind_bound` counts node executions: one step
+is one BPMN node being executed by one token. It is the largest number of steps
+any single run of all the processes together can take, with these rules:
 
-    BOUND = acyclic_path_length + sum(loop_length × max_retries  for each loop)
-
-Entry point: _compute_bound(bpmn, max_retries)
+- A start event runs once, and every process runs concurrently, so the steps of
+  all processes and all start events add up.
+- An exclusive gateway sends the token down one branch, so it costs the most
+  expensive branch.
+- A parallel gateway with several outgoing flows sends a token down every
+  branch, so it costs the sum of the branches. The join where they meet runs
+  once, not once per branch.
+- A task with boundary events is treated like a fork with no join: the boundary
+  event may fire as well as the task finishing, so every path counts.
+- Loops can't be covered for every iteration count, so every loop body is
+  counted `loop_iterations` times (nested loops multiply). Two iterations is
+  enough to see what the first pass leaves behind for the second.
 """
 
-from collections import deque
+from bpmncwpverify.core.bpmn import (
+    Bpmn,
+    ExclusiveGatewayNode,
+    Node,
+    ParallelGatewayNode,
+    Process,
+    Task,
+)
 
-from bpmncwpverify.core.bpmn import Bpmn, EndEvent, Node, ParallelGatewayNode
+DEFAULT_LOOP_ITERATIONS = 2
 
 
-def _find_matching_join(fork: ParallelGatewayNode, path: frozenset[str]) -> Node | None:
+def _successors(node: Node) -> list[Node]:
+    successors = [flow.target_node for flow in node.out_flows]
+    if isinstance(node, Task):
+        successors.extend(node.msg_boundary_events)
+    return successors
+
+
+def _is_join(node: Node) -> bool:
+    return isinstance(node, ParallelGatewayNode) and len(node.in_flows) > 1
+
+
+def _is_fork(node: Node) -> bool:
+    return isinstance(node, ParallelGatewayNode) and len(node.out_flows) > 1
+
+
+class _ProcessBound:
+    """Longest run of one process, with every loop back edge cut and weighted."""
+
+    def __init__(self, process: Process, loop_iterations: int) -> None:
+        self._loop_iterations = loop_iterations
+        self._back_edges: set[tuple[str, str]] = set()
+        self._weights: dict[str, int] = {}
+        self._memo: dict[str, tuple[int, frozenset[str]]] = {}
+        self._nodes: dict[str, Node] = {}
+        self._starts = list(process.get_start_states().values())
+        self._find_back_edges()
+        self._compute_weights()
+
+    def _find_back_edges(self) -> None:
+        on_stack: set[str] = set()
+
+        def dfs(node: Node) -> None:
+            self._nodes[node.id] = node
+            on_stack.add(node.id)
+            for succ in _successors(node):
+                if succ.id in on_stack:
+                    self._back_edges.add((node.id, succ.id))
+                elif succ.id not in self._nodes:
+                    dfs(succ)
+            on_stack.discard(node.id)
+
+        for start in self._starts:
+            if start.id not in self._nodes:
+                dfs(start)
+
+    def _compute_weights(self) -> None:
+        predecessors: dict[str, list[str]] = {id: [] for id in self._nodes}
+        for node in self._nodes.values():
+            for succ in _successors(node):
+                predecessors[succ.id].append(node.id)
+
+        depth = {id: 0 for id in self._nodes}
+        # Back edges that share a header form a single loop
+        bodies: dict[str, set[str]] = {}
+        for tail, header in self._back_edges:
+            body = bodies.setdefault(header, {header})
+            pending = [tail]
+            while pending:
+                current = pending.pop()
+                if current not in body:
+                    body.add(current)
+                    pending.extend(predecessors[current])
+        for body in bodies.values():
+            for id in body:
+                depth[id] += 1
+
+        self._weights = {id: self._loop_iterations**d for id, d in depth.items()}
+
+    def _forward(self, node: Node) -> list[Node]:
+        return [
+            succ
+            for succ in _successors(node)
+            if (node.id, succ.id) not in self._back_edges
+        ]
+
+    def _enter(self, node: Node) -> tuple[int, frozenset[str]]:
+        # A join is not part of any one branch; whoever forked resolves it
+        if _is_join(node):
+            return 0, frozenset({node.id})
+        return self._run(node)
+
+    def _run(self, node: Node) -> tuple[int, frozenset[str]]:
+        if node.id in self._memo:
+            return self._memo[node.id]
+
+        weight = self._weights[node.id]
+        branches = [self._enter(succ) for succ in self._forward(node)]
+        joins: frozenset[str] = frozenset()
+        for _, joined in branches:
+            joins |= joined
+
+        result: tuple[int, frozenset[str]]
+        if not branches:
+            result = (weight, frozenset())
+        elif isinstance(node, ExclusiveGatewayNode):
+            result = (weight + max(cost for cost, _ in branches), joins)
+        else:
+            cost = weight + sum(cost for cost, _ in branches)
+            if _is_fork(node):
+                cost, joins = self._resolve(cost, joins)
+            result = (cost, joins)
+
+        self._memo[node.id] = result
+        return result
+
+    def _resolve(self, cost: int, joins: frozenset[str]) -> tuple[int, frozenset[str]]:
+        """Run each join where this fork's branches meet once, and carry on."""
+        carried: frozenset[str] = frozenset()
+        for join_id in sorted(joins):
+            join_cost, join_joins = self._run(self._nodes[join_id])
+            cost += join_cost
+            carried |= join_joins
+        return cost, carried
+
+    def steps(self) -> int:
+        total, unresolved = 0, frozenset[str]()
+        for start in self._starts:
+            cost, joins = self._run(start)
+            total += cost
+            unresolved |= joins
+        # Joins nobody forked for are still executed once
+        total, _ = self._resolve(total, unresolved)
+        return total
+
+
+def compute_unwind_bound(
+    bpmn: Bpmn, loop_iterations: int = DEFAULT_LOOP_ITERATIONS
+) -> int:
     """
-    Return the immediate post-dominator of an AND-fork: the first node reachable
-    from every outgoing branch (i.e., the matching AND-join).
-    Returns None if no such node exists in the acyclic subgraph.
+    Compute a CBMC unwinding bound for a BPMN model.
+
+    Args:
+        bpmn (Bpmn): The model to bound
+        loop_iterations (int, optional): How many times each loop body is
+            counted. Defaults to 2.
+
+    Returns:
+        int: The most node executions a run can take, plus one, because
+        `--unwind N` lets a loop body run N - 1 times before the unwinding
+        assertion fails.
     """
-    branches = [f.target_node for f in fork.out_flows]
-    if len(branches) < 2:
-        return None
-
-    def _reachable(start: Node) -> set[str]:
-        seen: set[str] = set()
-        stack: list[Node] = [start]
-        while stack:
-            n = stack.pop()
-            if n.id in seen or n.id in path:
-                continue
-            seen.add(n.id)
-            for f in n.out_flows:
-                stack.append(f.target_node)
-        return seen
-
-    common: set[str] = _reachable(branches[0])
-    for b in branches[1:]:
-        common &= _reachable(b)
-    if not common:
-        return None
-
-    # BFS from all branches simultaneously to find the closest common node.
-    visited: set[str] = {b.id for b in branches}
-    queue: deque[Node] = deque(branches)
-    while queue:
-        node = queue.popleft()
-        if node.id in common:
-            return node
-        for f in node.out_flows:
-            t = f.target_node
-            if t.id not in visited and t.id not in path:
-                visited.add(t.id)
-                queue.append(t)
-    return None
-
-
-def _acyclic_depth(node: Node, path: frozenset[str]) -> int:
-    """
-    Longest path (transition firings) from node to any end event in the acyclic skeleton.
-    Back-edges (target already in path) are treated as dead ends (-1).
-
-    AND-fork: both branches fire in separate loop iterations, so sum the branch depths.
-        However each branch depth includes the shared suffix after the matching AND-join,
-        which must be counted only once. Correction: subtract (n-1) copies of the join depth.
-    XOR-split: CBMC explores all branches, so use max to cover the longest one.
-    Sequential / join: 1 + max valid continuation.
-    Returns -1 if no end event is reachable without a back-edge.
-    """
-    if node.id in path:
-        return -1
-    new_path = path | {node.id}
-    if isinstance(node, EndEvent):
-        return 1
-    if not node.out_flows:
-        return -1
-    child_depths = [_acyclic_depth(f.target_node, new_path) for f in node.out_flows]
-    valid = [d for d in child_depths if d >= 0]
-    if not valid:
-        return -1
-    if isinstance(node, ParallelGatewayNode) and node.is_fork:
-        if len(valid) > 1:
-            join = _find_matching_join(node, new_path)
-            if join is not None:
-                join_depth = _acyclic_depth(join, new_path)
-                if join_depth >= 0:
-                    return 1 + sum(valid) - (len(valid) - 1) * join_depth
-        return 1 + sum(valid)
-    return 1 + max(valid)
-
-
-def _find_back_edges(
-    node: Node,
-    gray: set[str],
-    black: set[str],
-    back_edges: list[tuple[str, str]],
-) -> None:
-    """DFS coloring to collect back-edges as (source_id, target_id) pairs."""
-    if node.id in black or node.id in gray:
-        return
-    gray.add(node.id)
-    for flow in node.out_flows:
-        t = flow.target_node
-        if t.id in gray:
-            back_edges.append((node.id, t.id))
-        elif t.id not in black:
-            _find_back_edges(t, gray, black, back_edges)
-    gray.discard(node.id)
-    black.add(node.id)
-
-
-def _cycle_length_bfs(target: Node, source_id: str) -> int:
-    """
-    BFS from target to source_id in the forward graph.
-    Returns the number of transitions in the cycle (each node = 1 step).
-    """
-    queue: deque[tuple[Node, int]] = deque([(target, 1)])
-    visited: set[str] = {target.id}
-    while queue:
-        node, dist = queue.popleft()
-        if node.id == source_id:
-            return dist
-        for flow in node.out_flows:
-            t = flow.target_node
-            if t.id not in visited:
-                visited.add(t.id)
-                queue.append((t, dist + 1))
-    return 2  # fallback: minimum cycle
-
-
-def compute_bound(bpmn: Bpmn, max_retries: int) -> int:
-    """
-    Acyclic-skeleton longest path + loop contributions, summed across all pools.
-
-    For each process: compute acyclic depth from its start event(s), detect back-edges,
-    group by loop-entry node, take the longest cycle per entry, multiply by max_retries.
-    """
-    best = 0
-    for process in bpmn.processes.values():
-        for start in process.get_start_states().values():
-            acyclic = max(_acyclic_depth(start, frozenset()), 0)
-
-            back_edges: list[tuple[str, str]] = []
-            _find_back_edges(start, set(), set(), back_edges)
-
-            node_map: dict[str, Node] = dict(process.all_items())
-
-            # Per loop-entry (back-edge target): keep the longest cycle length.
-            target_max_cycle: dict[str, int] = {}
-            for source_id, target_id in back_edges:
-                if target_id not in node_map:
-                    continue
-                cycle_len = _cycle_length_bfs(node_map[target_id], source_id)
-                prev = target_max_cycle.get(target_id, 0)
-                target_max_cycle[target_id] = max(prev, cycle_len)
-
-            loop_total = sum(c * max_retries for c in target_max_cycle.values())
-            best = max(best, acyclic + loop_total)
-
-    return max(best, 1)
+    steps = sum(
+        _ProcessBound(process, loop_iterations).steps()
+        for process in bpmn.processes.values()
+    )
+    return steps + 1

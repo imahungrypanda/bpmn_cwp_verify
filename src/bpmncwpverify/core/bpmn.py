@@ -6,10 +6,9 @@ from returns.result import Failure, Result, Success
 from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnUnrecognizedElement,
-    BpmnUnsupportedStartEvent,
     Error,
 )
-from bpmncwpverify.core.feel import Feel
+from bpmncwpverify.core.feel_tree import FeelNode
 
 BPMN_XML_NAMESPACE = {"bpmn": "http://www.omg.org/spec/BPMN/20100524/MODEL"}
 
@@ -51,10 +50,6 @@ class BpmnElement:
         Method for subclasses to add additional attributes to from_xml method
         """
         return {}
-
-    @classmethod
-    def verify_element(cls: type[T], element: Element, id: str) -> Result[None, Error]:
-        return Success(None)
 
 
 class Node(BpmnElement):
@@ -182,13 +177,6 @@ class StartEvent(Event):
         self.traverse_outflows_if_result(visitor, result)
         visitor.end_visit_start_event(self)
 
-    @classmethod
-    def verify_element(cls, element: Element, id: str) -> Result[None, Error]:
-        if element.find("bpmn:messageEventDefinition", BPMN_XML_NAMESPACE) is not None:
-            return Failure(BpmnUnsupportedStartEvent(id))
-
-        return Success(None)
-
 
 class EndEvent(Event):
     """
@@ -279,7 +267,7 @@ class Task(Node):
             self.traverse_outflows_if_result(visitor, result)
             visitor.end_visit_boundary_event(self)
 
-    def __init__(self, id: str, name: str, behavior: str | Feel) -> None:
+    def __init__(self, id: str, name: str, behavior: "str | FeelNode") -> None:
         super().__init__(id, name)
         self.behavior = behavior
         self.msg_boundary_events: list[Task.BoundaryEvent] = []
@@ -316,17 +304,6 @@ class GatewayNode(Node):
     """
 
     pass
-
-
-class EventBasedGatewayNode(GatewayNode):
-    """
-    Gateway that allows waiting until one of the events gets a token
-    """
-
-    def accept(self, visitor: "BpmnVisitor") -> None:
-        result = visitor.visit_event_based_gateway(self)
-        self.traverse_outflows_if_result(visitor, result)
-        visitor.end_visit_event_based_gateway(self)
 
 
 class ExclusiveGatewayNode(GatewayNode):
@@ -403,7 +380,7 @@ class SequenceFlow(Flow):
         Initialize SequenceFlow object
         """
         super().__init__(id, name)
-        self.expression: str | Feel = ""
+        self.expression: str | FeelNode = ""
 
     def accept(self, visitor: "BpmnVisitor") -> None:
         if visitor.visit_sequence_flow(self) and not self.is_leaf:
@@ -501,7 +478,6 @@ def get_element_type(tag: str) -> Result[type[SequenceFlow] | type[Node], Error]
         "task": Task,
         "startEvent": StartEvent,
         "endEvent": EndEvent,
-        "eventBasedGateway": EventBasedGatewayNode,
         "exclusiveGateway": ExclusiveGatewayNode,
         "parallelGateway": ParallelGatewayNode,
         "sendTask": IntermediateEvent,
@@ -609,12 +585,6 @@ class BpmnVisitor:
         return True
 
     def end_visit_boundary_event(self, boundary_event: Task.BoundaryEvent) -> None:
-        pass
-
-    def visit_event_based_gateway(self, gateway: EventBasedGatewayNode) -> bool:
-        return True
-
-    def end_visit_event_based_gateway(self, gateway: EventBasedGatewayNode) -> None:
         pass
 
     def visit_exclusive_gateway(self, gateway: ExclusiveGatewayNode) -> bool:

@@ -1,948 +1,397 @@
 # Generated from antlr/FeelExpr.g4 by ANTLR 4.13.2
 from antlr4 import *
+
 if "." in __name__:
     from .FeelExprParser import FeelExprParser
 else:
     from FeelExprParser import FeelExprParser
 
+
 # This class defines a complete listener for a parse tree produced by FeelExprParser.
 class FeelExprListener(ParseTreeListener):
-
-    # Enter a parse tree produced by FeelExprParser#compilation_unit.
-    def enterCompilation_unit(self, ctx:FeelExprParser.Compilation_unitContext):
+    # Enter a parse tree produced by FeelExprParser#start.
+    def enterStart(self, ctx: FeelExprParser.StartContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#compilation_unit.
-    def exitCompilation_unit(self, ctx:FeelExprParser.Compilation_unitContext):
+    # Exit a parse tree produced by FeelExprParser#start.
+    def exitStart(self, ctx: FeelExprParser.StartContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#expressionTextual.
-    def enterExpressionTextual(self, ctx:FeelExprParser.ExpressionTextualContext):
+    # Enter a parse tree produced by FeelExprParser#behavior.
+    def enterBehavior(self, ctx: FeelExprParser.BehaviorContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#expressionTextual.
-    def exitExpressionTextual(self, ctx:FeelExprParser.ExpressionTextualContext):
+    # Exit a parse tree produced by FeelExprParser#behavior.
+    def exitBehavior(self, ctx: FeelExprParser.BehaviorContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#textualExpression.
-    def enterTextualExpression(self, ctx:FeelExprParser.TextualExpressionContext):
+    # Enter a parse tree produced by FeelExprParser#triple.
+    def enterTriple(self, ctx: FeelExprParser.TripleContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#textualExpression.
-    def exitTextualExpression(self, ctx:FeelExprParser.TextualExpressionContext):
+    # Exit a parse tree produced by FeelExprParser#triple.
+    def exitTriple(self, ctx: FeelExprParser.TripleContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#parametersEmpty.
-    def enterParametersEmpty(self, ctx:FeelExprParser.ParametersEmptyContext):
+    # Enter a parse tree produced by FeelExprParser#nameList.
+    def enterNameList(self, ctx: FeelExprParser.NameListContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#parametersEmpty.
-    def exitParametersEmpty(self, ctx:FeelExprParser.ParametersEmptyContext):
+    # Exit a parse tree produced by FeelExprParser#nameList.
+    def exitNameList(self, ctx: FeelExprParser.NameListContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#parametersNamed.
-    def enterParametersNamed(self, ctx:FeelExprParser.ParametersNamedContext):
+    # Enter a parse tree produced by FeelExprParser#If.
+    def enterIf(self, ctx: FeelExprParser.IfContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#parametersNamed.
-    def exitParametersNamed(self, ctx:FeelExprParser.ParametersNamedContext):
+    # Exit a parse tree produced by FeelExprParser#If.
+    def exitIf(self, ctx: FeelExprParser.IfContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#parametersPositional.
-    def enterParametersPositional(self, ctx:FeelExprParser.ParametersPositionalContext):
+    # Enter a parse tree produced by FeelExprParser#For.
+    def enterFor(self, ctx: FeelExprParser.ForContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#parametersPositional.
-    def exitParametersPositional(self, ctx:FeelExprParser.ParametersPositionalContext):
+    # Exit a parse tree produced by FeelExprParser#For.
+    def exitFor(self, ctx: FeelExprParser.ForContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#namedParameters.
-    def enterNamedParameters(self, ctx:FeelExprParser.NamedParametersContext):
+    # Enter a parse tree produced by FeelExprParser#Quantified.
+    def enterQuantified(self, ctx: FeelExprParser.QuantifiedContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#namedParameters.
-    def exitNamedParameters(self, ctx:FeelExprParser.NamedParametersContext):
+    # Exit a parse tree produced by FeelExprParser#Quantified.
+    def exitQuantified(self, ctx: FeelExprParser.QuantifiedContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#namedParameter.
-    def enterNamedParameter(self, ctx:FeelExprParser.NamedParameterContext):
+    # Enter a parse tree produced by FeelExprParser#ToOr.
+    def enterToOr(self, ctx: FeelExprParser.ToOrContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#namedParameter.
-    def exitNamedParameter(self, ctx:FeelExprParser.NamedParameterContext):
+    # Exit a parse tree produced by FeelExprParser#ToOr.
+    def exitToOr(self, ctx: FeelExprParser.ToOrContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#positionalParameters.
-    def enterPositionalParameters(self, ctx:FeelExprParser.PositionalParametersContext):
+    # Enter a parse tree produced by FeelExprParser#forBinding.
+    def enterForBinding(self, ctx: FeelExprParser.ForBindingContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#positionalParameters.
-    def exitPositionalParameters(self, ctx:FeelExprParser.PositionalParametersContext):
+    # Exit a parse tree produced by FeelExprParser#forBinding.
+    def exitForBinding(self, ctx: FeelExprParser.ForBindingContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#forExpression.
-    def enterForExpression(self, ctx:FeelExprParser.ForExpressionContext):
+    # Enter a parse tree produced by FeelExprParser#ToXor.
+    def enterToXor(self, ctx: FeelExprParser.ToXorContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#forExpression.
-    def exitForExpression(self, ctx:FeelExprParser.ForExpressionContext):
+    # Exit a parse tree produced by FeelExprParser#ToXor.
+    def exitToXor(self, ctx: FeelExprParser.ToXorContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#iterationContexts.
-    def enterIterationContexts(self, ctx:FeelExprParser.IterationContextsContext):
+    # Enter a parse tree produced by FeelExprParser#Or.
+    def enterOr(self, ctx: FeelExprParser.OrContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#iterationContexts.
-    def exitIterationContexts(self, ctx:FeelExprParser.IterationContextsContext):
+    # Exit a parse tree produced by FeelExprParser#Or.
+    def exitOr(self, ctx: FeelExprParser.OrContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#iterationContext.
-    def enterIterationContext(self, ctx:FeelExprParser.IterationContextContext):
+    # Enter a parse tree produced by FeelExprParser#Xor.
+    def enterXor(self, ctx: FeelExprParser.XorContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#iterationContext.
-    def exitIterationContext(self, ctx:FeelExprParser.IterationContextContext):
+    # Exit a parse tree produced by FeelExprParser#Xor.
+    def exitXor(self, ctx: FeelExprParser.XorContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#ifExpression.
-    def enterIfExpression(self, ctx:FeelExprParser.IfExpressionContext):
+    # Enter a parse tree produced by FeelExprParser#ToAnd.
+    def enterToAnd(self, ctx: FeelExprParser.ToAndContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#ifExpression.
-    def exitIfExpression(self, ctx:FeelExprParser.IfExpressionContext):
+    # Exit a parse tree produced by FeelExprParser#ToAnd.
+    def exitToAnd(self, ctx: FeelExprParser.ToAndContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#quantExprSome.
-    def enterQuantExprSome(self, ctx:FeelExprParser.QuantExprSomeContext):
+    # Enter a parse tree produced by FeelExprParser#And.
+    def enterAnd(self, ctx: FeelExprParser.AndContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#quantExprSome.
-    def exitQuantExprSome(self, ctx:FeelExprParser.QuantExprSomeContext):
+    # Exit a parse tree produced by FeelExprParser#And.
+    def exitAnd(self, ctx: FeelExprParser.AndContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#quantExprEvery.
-    def enterQuantExprEvery(self, ctx:FeelExprParser.QuantExprEveryContext):
+    # Enter a parse tree produced by FeelExprParser#ToNot.
+    def enterToNot(self, ctx: FeelExprParser.ToNotContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#quantExprEvery.
-    def exitQuantExprEvery(self, ctx:FeelExprParser.QuantExprEveryContext):
+    # Exit a parse tree produced by FeelExprParser#ToNot.
+    def exitToNot(self, ctx: FeelExprParser.ToNotContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#listType.
-    def enterListType(self, ctx:FeelExprParser.ListTypeContext):
+    # Enter a parse tree produced by FeelExprParser#Not.
+    def enterNot(self, ctx: FeelExprParser.NotContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#listType.
-    def exitListType(self, ctx:FeelExprParser.ListTypeContext):
+    # Exit a parse tree produced by FeelExprParser#Not.
+    def exitNot(self, ctx: FeelExprParser.NotContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#rangeType.
-    def enterRangeType(self, ctx:FeelExprParser.RangeTypeContext):
+    # Enter a parse tree produced by FeelExprParser#ToRel.
+    def enterToRel(self, ctx: FeelExprParser.ToRelContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#rangeType.
-    def exitRangeType(self, ctx:FeelExprParser.RangeTypeContext):
+    # Exit a parse tree produced by FeelExprParser#ToRel.
+    def exitToRel(self, ctx: FeelExprParser.ToRelContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#contextType.
-    def enterContextType(self, ctx:FeelExprParser.ContextTypeContext):
+    # Enter a parse tree produced by FeelExprParser#InTest.
+    def enterInTest(self, ctx: FeelExprParser.InTestContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#contextType.
-    def exitContextType(self, ctx:FeelExprParser.ContextTypeContext):
+    # Exit a parse tree produced by FeelExprParser#InTest.
+    def exitInTest(self, ctx: FeelExprParser.InTestContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#qnType.
-    def enterQnType(self, ctx:FeelExprParser.QnTypeContext):
+    # Enter a parse tree produced by FeelExprParser#Between.
+    def enterBetween(self, ctx: FeelExprParser.BetweenContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#qnType.
-    def exitQnType(self, ctx:FeelExprParser.QnTypeContext):
+    # Exit a parse tree produced by FeelExprParser#Between.
+    def exitBetween(self, ctx: FeelExprParser.BetweenContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#functionType.
-    def enterFunctionType(self, ctx:FeelExprParser.FunctionTypeContext):
+    # Enter a parse tree produced by FeelExprParser#Relational.
+    def enterRelational(self, ctx: FeelExprParser.RelationalContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#functionType.
-    def exitFunctionType(self, ctx:FeelExprParser.FunctionTypeContext):
+    # Exit a parse tree produced by FeelExprParser#Relational.
+    def exitRelational(self, ctx: FeelExprParser.RelationalContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#list.
-    def enterList(self, ctx:FeelExprParser.ListContext):
+    # Enter a parse tree produced by FeelExprParser#ToAddSub.
+    def enterToAddSub(self, ctx: FeelExprParser.ToAddSubContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#list.
-    def exitList(self, ctx:FeelExprParser.ListContext):
+    # Exit a parse tree produced by FeelExprParser#ToAddSub.
+    def exitToAddSub(self, ctx: FeelExprParser.ToAddSubContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#functionDefinition.
-    def enterFunctionDefinition(self, ctx:FeelExprParser.FunctionDefinitionContext):
+    # Enter a parse tree produced by FeelExprParser#AddSub.
+    def enterAddSub(self, ctx: FeelExprParser.AddSubContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#functionDefinition.
-    def exitFunctionDefinition(self, ctx:FeelExprParser.FunctionDefinitionContext):
+    # Exit a parse tree produced by FeelExprParser#AddSub.
+    def exitAddSub(self, ctx: FeelExprParser.AddSubContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#formalParameters.
-    def enterFormalParameters(self, ctx:FeelExprParser.FormalParametersContext):
+    # Enter a parse tree produced by FeelExprParser#ToMulDiv.
+    def enterToMulDiv(self, ctx: FeelExprParser.ToMulDivContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#formalParameters.
-    def exitFormalParameters(self, ctx:FeelExprParser.FormalParametersContext):
+    # Exit a parse tree produced by FeelExprParser#ToMulDiv.
+    def exitToMulDiv(self, ctx: FeelExprParser.ToMulDivContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#formalParameter.
-    def enterFormalParameter(self, ctx:FeelExprParser.FormalParameterContext):
+    # Enter a parse tree produced by FeelExprParser#ToUnary.
+    def enterToUnary(self, ctx: FeelExprParser.ToUnaryContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#formalParameter.
-    def exitFormalParameter(self, ctx:FeelExprParser.FormalParameterContext):
+    # Exit a parse tree produced by FeelExprParser#ToUnary.
+    def exitToUnary(self, ctx: FeelExprParser.ToUnaryContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#context.
-    def enterContext(self, ctx:FeelExprParser.ContextContext):
+    # Enter a parse tree produced by FeelExprParser#MulDiv.
+    def enterMulDiv(self, ctx: FeelExprParser.MulDivContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#context.
-    def exitContext(self, ctx:FeelExprParser.ContextContext):
+    # Exit a parse tree produced by FeelExprParser#MulDiv.
+    def exitMulDiv(self, ctx: FeelExprParser.MulDivContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#contextEntries.
-    def enterContextEntries(self, ctx:FeelExprParser.ContextEntriesContext):
+    # Enter a parse tree produced by FeelExprParser#Negate.
+    def enterNegate(self, ctx: FeelExprParser.NegateContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#contextEntries.
-    def exitContextEntries(self, ctx:FeelExprParser.ContextEntriesContext):
+    # Exit a parse tree produced by FeelExprParser#Negate.
+    def exitNegate(self, ctx: FeelExprParser.NegateContext):
         pass
 
+    # Enter a parse tree produced by FeelExprParser#ToPow.
+    def enterToPow(self, ctx: FeelExprParser.ToPowContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#ToPow.
+    def exitToPow(self, ctx: FeelExprParser.ToPowContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#ToPostfix.
+    def enterToPostfix(self, ctx: FeelExprParser.ToPostfixContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#ToPostfix.
+    def exitToPostfix(self, ctx: FeelExprParser.ToPostfixContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#Pow.
+    def enterPow(self, ctx: FeelExprParser.PowContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#Pow.
+    def exitPow(self, ctx: FeelExprParser.PowContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#Filter.
+    def enterFilter(self, ctx: FeelExprParser.FilterContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#Filter.
+    def exitFilter(self, ctx: FeelExprParser.FilterContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#ToAtom.
+    def enterToAtom(self, ctx: FeelExprParser.ToAtomContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#ToAtom.
+    def exitToAtom(self, ctx: FeelExprParser.ToAtomContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#Number.
+    def enterNumber(self, ctx: FeelExprParser.NumberContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#Number.
+    def exitNumber(self, ctx: FeelExprParser.NumberContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#True.
+    def enterTrue(self, ctx: FeelExprParser.TrueContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#True.
+    def exitTrue(self, ctx: FeelExprParser.TrueContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#False.
+    def enterFalse(self, ctx: FeelExprParser.FalseContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#False.
+    def exitFalse(self, ctx: FeelExprParser.FalseContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#Ref.
+    def enterRef(self, ctx: FeelExprParser.RefContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#Ref.
+    def exitRef(self, ctx: FeelExprParser.RefContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#ListLit.
+    def enterListLit(self, ctx: FeelExprParser.ListLitContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#ListLit.
+    def exitListLit(self, ctx: FeelExprParser.ListLitContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#Choose.
+    def enterChoose(self, ctx: FeelExprParser.ChooseContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#Choose.
+    def exitChoose(self, ctx: FeelExprParser.ChooseContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#Parens.
+    def enterParens(self, ctx: FeelExprParser.ParensContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#Parens.
+    def exitParens(self, ctx: FeelExprParser.ParensContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#String.
+    def enterString(self, ctx: FeelExprParser.StringContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#String.
+    def exitString(self, ctx: FeelExprParser.StringContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#Null.
+    def enterNull(self, ctx: FeelExprParser.NullContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#Null.
+    def exitNull(self, ctx: FeelExprParser.NullContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#DateLiteral.
+    def enterDateLiteral(self, ctx: FeelExprParser.DateLiteralContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#DateLiteral.
+    def exitDateLiteral(self, ctx: FeelExprParser.DateLiteralContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#Call.
+    def enterCall(self, ctx: FeelExprParser.CallContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#Call.
+    def exitCall(self, ctx: FeelExprParser.CallContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#FunctionDef.
+    def enterFunctionDef(self, ctx: FeelExprParser.FunctionDefContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#FunctionDef.
+    def exitFunctionDef(self, ctx: FeelExprParser.FunctionDefContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#Context.
+    def enterContext(self, ctx: FeelExprParser.ContextContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#Context.
+    def exitContext(self, ctx: FeelExprParser.ContextContext):
+        pass
+
+    # Enter a parse tree produced by FeelExprParser#Interval.
+    def enterInterval(self, ctx: FeelExprParser.IntervalContext):
+        pass
+
+    # Exit a parse tree produced by FeelExprParser#Interval.
+    def exitInterval(self, ctx: FeelExprParser.IntervalContext):
+        pass
 
     # Enter a parse tree produced by FeelExprParser#contextEntry.
-    def enterContextEntry(self, ctx:FeelExprParser.ContextEntryContext):
+    def enterContextEntry(self, ctx: FeelExprParser.ContextEntryContext):
         pass
 
     # Exit a parse tree produced by FeelExprParser#contextEntry.
-    def exitContextEntry(self, ctx:FeelExprParser.ContextEntryContext):
+    def exitContextEntry(self, ctx: FeelExprParser.ContextEntryContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#keyName.
-    def enterKeyName(self, ctx:FeelExprParser.KeyNameContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#keyName.
-    def exitKeyName(self, ctx:FeelExprParser.KeyNameContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#keyString.
-    def enterKeyString(self, ctx:FeelExprParser.KeyStringContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#keyString.
-    def exitKeyString(self, ctx:FeelExprParser.KeyStringContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#nameDefinition.
-    def enterNameDefinition(self, ctx:FeelExprParser.NameDefinitionContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#nameDefinition.
-    def exitNameDefinition(self, ctx:FeelExprParser.NameDefinitionContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#nameDefinitionWithEOF.
-    def enterNameDefinitionWithEOF(self, ctx:FeelExprParser.NameDefinitionWithEOFContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#nameDefinitionWithEOF.
-    def exitNameDefinitionWithEOF(self, ctx:FeelExprParser.NameDefinitionWithEOFContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#nameDefinitionTokens.
-    def enterNameDefinitionTokens(self, ctx:FeelExprParser.NameDefinitionTokensContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#nameDefinitionTokens.
-    def exitNameDefinitionTokens(self, ctx:FeelExprParser.NameDefinitionTokensContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#iterationNameDefinition.
-    def enterIterationNameDefinition(self, ctx:FeelExprParser.IterationNameDefinitionContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#iterationNameDefinition.
-    def exitIterationNameDefinition(self, ctx:FeelExprParser.IterationNameDefinitionContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#iterationNameDefinitionTokens.
-    def enterIterationNameDefinitionTokens(self, ctx:FeelExprParser.IterationNameDefinitionTokensContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#iterationNameDefinitionTokens.
-    def exitIterationNameDefinitionTokens(self, ctx:FeelExprParser.IterationNameDefinitionTokensContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#additionalNameSymbol.
-    def enterAdditionalNameSymbol(self, ctx:FeelExprParser.AdditionalNameSymbolContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#additionalNameSymbol.
-    def exitAdditionalNameSymbol(self, ctx:FeelExprParser.AdditionalNameSymbolContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#condOr.
-    def enterCondOr(self, ctx:FeelExprParser.CondOrContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#condOr.
-    def exitCondOr(self, ctx:FeelExprParser.CondOrContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#condOrXor.
-    def enterCondOrXor(self, ctx:FeelExprParser.CondOrXorContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#condOrXor.
-    def exitCondOrXor(self, ctx:FeelExprParser.CondOrXorContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#condXorAnd.
-    def enterCondXorAnd(self, ctx:FeelExprParser.CondXorAndContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#condXorAnd.
-    def exitCondXorAnd(self, ctx:FeelExprParser.CondXorAndContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#condXOr.
-    def enterCondXOr(self, ctx:FeelExprParser.CondXOrContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#condXOr.
-    def exitCondXOr(self, ctx:FeelExprParser.CondXOrContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#condAndComp.
-    def enterCondAndComp(self, ctx:FeelExprParser.CondAndCompContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#condAndComp.
-    def exitCondAndComp(self, ctx:FeelExprParser.CondAndCompContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#condAnd.
-    def enterCondAnd(self, ctx:FeelExprParser.CondAndContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#condAnd.
-    def exitCondAnd(self, ctx:FeelExprParser.CondAndContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#compExpression.
-    def enterCompExpression(self, ctx:FeelExprParser.CompExpressionContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#compExpression.
-    def exitCompExpression(self, ctx:FeelExprParser.CompExpressionContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#compExpressionRel.
-    def enterCompExpressionRel(self, ctx:FeelExprParser.CompExpressionRelContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#compExpressionRel.
-    def exitCompExpressionRel(self, ctx:FeelExprParser.CompExpressionRelContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#relExpressionBetween.
-    def enterRelExpressionBetween(self, ctx:FeelExprParser.RelExpressionBetweenContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#relExpressionBetween.
-    def exitRelExpressionBetween(self, ctx:FeelExprParser.RelExpressionBetweenContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#relExpressionValue.
-    def enterRelExpressionValue(self, ctx:FeelExprParser.RelExpressionValueContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#relExpressionValue.
-    def exitRelExpressionValue(self, ctx:FeelExprParser.RelExpressionValueContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#relExpressionTestList.
-    def enterRelExpressionTestList(self, ctx:FeelExprParser.RelExpressionTestListContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#relExpressionTestList.
-    def exitRelExpressionTestList(self, ctx:FeelExprParser.RelExpressionTestListContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#relExpressionAdd.
-    def enterRelExpressionAdd(self, ctx:FeelExprParser.RelExpressionAddContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#relExpressionAdd.
-    def exitRelExpressionAdd(self, ctx:FeelExprParser.RelExpressionAddContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#relExpressionInstanceOf.
-    def enterRelExpressionInstanceOf(self, ctx:FeelExprParser.RelExpressionInstanceOfContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#relExpressionInstanceOf.
-    def exitRelExpressionInstanceOf(self, ctx:FeelExprParser.RelExpressionInstanceOfContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#expressionList.
-    def enterExpressionList(self, ctx:FeelExprParser.ExpressionListContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#expressionList.
-    def exitExpressionList(self, ctx:FeelExprParser.ExpressionListContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#addExpressionMult.
-    def enterAddExpressionMult(self, ctx:FeelExprParser.AddExpressionMultContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#addExpressionMult.
-    def exitAddExpressionMult(self, ctx:FeelExprParser.AddExpressionMultContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#addExpression.
-    def enterAddExpression(self, ctx:FeelExprParser.AddExpressionContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#addExpression.
-    def exitAddExpression(self, ctx:FeelExprParser.AddExpressionContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#multExpressionPow.
-    def enterMultExpressionPow(self, ctx:FeelExprParser.MultExpressionPowContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#multExpressionPow.
-    def exitMultExpressionPow(self, ctx:FeelExprParser.MultExpressionPowContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#multExpression.
-    def enterMultExpression(self, ctx:FeelExprParser.MultExpressionContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#multExpression.
-    def exitMultExpression(self, ctx:FeelExprParser.MultExpressionContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#powExpressionUnary.
-    def enterPowExpressionUnary(self, ctx:FeelExprParser.PowExpressionUnaryContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#powExpressionUnary.
-    def exitPowExpressionUnary(self, ctx:FeelExprParser.PowExpressionUnaryContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#powExpression.
-    def enterPowExpression(self, ctx:FeelExprParser.PowExpressionContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#powExpression.
-    def exitPowExpression(self, ctx:FeelExprParser.PowExpressionContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#pathDescendantFilterExpression.
-    def enterPathDescendantFilterExpression(self, ctx:FeelExprParser.PathDescendantFilterExpressionContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#pathDescendantFilterExpression.
-    def exitPathDescendantFilterExpression(self, ctx:FeelExprParser.PathDescendantFilterExpressionContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#signedUnaryExpressionPlus.
-    def enterSignedUnaryExpressionPlus(self, ctx:FeelExprParser.SignedUnaryExpressionPlusContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#signedUnaryExpressionPlus.
-    def exitSignedUnaryExpressionPlus(self, ctx:FeelExprParser.SignedUnaryExpressionPlusContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#signedUnaryExpressionMinus.
-    def enterSignedUnaryExpressionMinus(self, ctx:FeelExprParser.SignedUnaryExpressionMinusContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#signedUnaryExpressionMinus.
-    def exitSignedUnaryExpressionMinus(self, ctx:FeelExprParser.SignedUnaryExpressionMinusContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#fnInvocation.
-    def enterFnInvocation(self, ctx:FeelExprParser.FnInvocationContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#fnInvocation.
-    def exitFnInvocation(self, ctx:FeelExprParser.FnInvocationContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#nonSignedUnaryExpression.
-    def enterNonSignedUnaryExpression(self, ctx:FeelExprParser.NonSignedUnaryExpressionContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#nonSignedUnaryExpression.
-    def exitNonSignedUnaryExpression(self, ctx:FeelExprParser.NonSignedUnaryExpressionContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#uenpmPrimary.
-    def enterUenpmPrimary(self, ctx:FeelExprParser.UenpmPrimaryContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#uenpmPrimary.
-    def exitUenpmPrimary(self, ctx:FeelExprParser.UenpmPrimaryContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#chooseExpression.
-    def enterChooseExpression(self, ctx:FeelExprParser.ChooseExpressionContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#chooseExpression.
-    def exitChooseExpression(self, ctx:FeelExprParser.ChooseExpressionContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#tripExpression.
-    def enterTripExpression(self, ctx:FeelExprParser.TripExpressionContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#tripExpression.
-    def exitTripExpression(self, ctx:FeelExprParser.TripExpressionContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#tripleList.
-    def enterTripleList(self, ctx:FeelExprParser.TripleListContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#tripleList.
-    def exitTripleList(self, ctx:FeelExprParser.TripleListContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#primaryLiteral.
-    def enterPrimaryLiteral(self, ctx:FeelExprParser.PrimaryLiteralContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#primaryLiteral.
-    def exitPrimaryLiteral(self, ctx:FeelExprParser.PrimaryLiteralContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#primaryForExpression.
-    def enterPrimaryForExpression(self, ctx:FeelExprParser.PrimaryForExpressionContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#primaryForExpression.
-    def exitPrimaryForExpression(self, ctx:FeelExprParser.PrimaryForExpressionContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#primaryQuantifiedExpression.
-    def enterPrimaryQuantifiedExpression(self, ctx:FeelExprParser.PrimaryQuantifiedExpressionContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#primaryQuantifiedExpression.
-    def exitPrimaryQuantifiedExpression(self, ctx:FeelExprParser.PrimaryQuantifiedExpressionContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#primaryIfExpression.
-    def enterPrimaryIfExpression(self, ctx:FeelExprParser.PrimaryIfExpressionContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#primaryIfExpression.
-    def exitPrimaryIfExpression(self, ctx:FeelExprParser.PrimaryIfExpressionContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#primaryTripleExpression.
-    def enterPrimaryTripleExpression(self, ctx:FeelExprParser.PrimaryTripleExpressionContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#primaryTripleExpression.
-    def exitPrimaryTripleExpression(self, ctx:FeelExprParser.PrimaryTripleExpressionContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#primaryTripleList.
-    def enterPrimaryTripleList(self, ctx:FeelExprParser.PrimaryTripleListContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#primaryTripleList.
-    def exitPrimaryTripleList(self, ctx:FeelExprParser.PrimaryTripleListContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#primaryInterval.
-    def enterPrimaryInterval(self, ctx:FeelExprParser.PrimaryIntervalContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#primaryInterval.
-    def exitPrimaryInterval(self, ctx:FeelExprParser.PrimaryIntervalContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#primaryList.
-    def enterPrimaryList(self, ctx:FeelExprParser.PrimaryListContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#primaryList.
-    def exitPrimaryList(self, ctx:FeelExprParser.PrimaryListContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#primaryContext.
-    def enterPrimaryContext(self, ctx:FeelExprParser.PrimaryContextContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#primaryContext.
-    def exitPrimaryContext(self, ctx:FeelExprParser.PrimaryContextContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#primaryChoose.
-    def enterPrimaryChoose(self, ctx:FeelExprParser.PrimaryChooseContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#primaryChoose.
-    def exitPrimaryChoose(self, ctx:FeelExprParser.PrimaryChooseContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#primaryParens.
-    def enterPrimaryParens(self, ctx:FeelExprParser.PrimaryParensContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#primaryParens.
-    def exitPrimaryParens(self, ctx:FeelExprParser.PrimaryParensContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#primaryUnaryTest.
-    def enterPrimaryUnaryTest(self, ctx:FeelExprParser.PrimaryUnaryTestContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#primaryUnaryTest.
-    def exitPrimaryUnaryTest(self, ctx:FeelExprParser.PrimaryUnaryTestContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#primaryName.
-    def enterPrimaryName(self, ctx:FeelExprParser.PrimaryNameContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#primaryName.
-    def exitPrimaryName(self, ctx:FeelExprParser.PrimaryNameContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#numberLiteral.
-    def enterNumberLiteral(self, ctx:FeelExprParser.NumberLiteralContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#numberLiteral.
-    def exitNumberLiteral(self, ctx:FeelExprParser.NumberLiteralContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#boolLiteral.
-    def enterBoolLiteral(self, ctx:FeelExprParser.BoolLiteralContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#boolLiteral.
-    def exitBoolLiteral(self, ctx:FeelExprParser.BoolLiteralContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#atLiteralLabel.
-    def enterAtLiteralLabel(self, ctx:FeelExprParser.AtLiteralLabelContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#atLiteralLabel.
-    def exitAtLiteralLabel(self, ctx:FeelExprParser.AtLiteralLabelContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#stringLiteral.
-    def enterStringLiteral(self, ctx:FeelExprParser.StringLiteralContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#stringLiteral.
-    def exitStringLiteral(self, ctx:FeelExprParser.StringLiteralContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#nullLiteral.
-    def enterNullLiteral(self, ctx:FeelExprParser.NullLiteralContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#nullLiteral.
-    def exitNullLiteral(self, ctx:FeelExprParser.NullLiteralContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#undefined.
-    def enterUndefined(self, ctx:FeelExprParser.UndefinedContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#undefined.
-    def exitUndefined(self, ctx:FeelExprParser.UndefinedContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#atLiteral.
-    def enterAtLiteral(self, ctx:FeelExprParser.AtLiteralContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#atLiteral.
-    def exitAtLiteral(self, ctx:FeelExprParser.AtLiteralContext):
+    # Enter a parse tree produced by FeelExprParser#list.
+    def enterList(self, ctx: FeelExprParser.ListContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#atLiteralValue.
-    def enterAtLiteralValue(self, ctx:FeelExprParser.AtLiteralValueContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#atLiteralValue.
-    def exitAtLiteralValue(self, ctx:FeelExprParser.AtLiteralValueContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#positiveUnaryTestIneqInterval.
-    def enterPositiveUnaryTestIneqInterval(self, ctx:FeelExprParser.PositiveUnaryTestIneqIntervalContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#positiveUnaryTestIneqInterval.
-    def exitPositiveUnaryTestIneqInterval(self, ctx:FeelExprParser.PositiveUnaryTestIneqIntervalContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#positiveUnaryTestIneq.
-    def enterPositiveUnaryTestIneq(self, ctx:FeelExprParser.PositiveUnaryTestIneqContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#positiveUnaryTestIneq.
-    def exitPositiveUnaryTestIneq(self, ctx:FeelExprParser.PositiveUnaryTestIneqContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#positiveUnaryTestInterval.
-    def enterPositiveUnaryTestInterval(self, ctx:FeelExprParser.PositiveUnaryTestIntervalContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#positiveUnaryTestInterval.
-    def exitPositiveUnaryTestInterval(self, ctx:FeelExprParser.PositiveUnaryTestIntervalContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#simplePositiveUnaryTests.
-    def enterSimplePositiveUnaryTests(self, ctx:FeelExprParser.SimplePositiveUnaryTestsContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#simplePositiveUnaryTests.
-    def exitSimplePositiveUnaryTests(self, ctx:FeelExprParser.SimplePositiveUnaryTestsContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#positiveSimplePositiveUnaryTests.
-    def enterPositiveSimplePositiveUnaryTests(self, ctx:FeelExprParser.PositiveSimplePositiveUnaryTestsContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#positiveSimplePositiveUnaryTests.
-    def exitPositiveSimplePositiveUnaryTests(self, ctx:FeelExprParser.PositiveSimplePositiveUnaryTestsContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#negatedSimplePositiveUnaryTests.
-    def enterNegatedSimplePositiveUnaryTests(self, ctx:FeelExprParser.NegatedSimplePositiveUnaryTestsContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#negatedSimplePositiveUnaryTests.
-    def exitNegatedSimplePositiveUnaryTests(self, ctx:FeelExprParser.NegatedSimplePositiveUnaryTestsContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#positiveUnaryTestDash.
-    def enterPositiveUnaryTestDash(self, ctx:FeelExprParser.PositiveUnaryTestDashContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#positiveUnaryTestDash.
-    def exitPositiveUnaryTestDash(self, ctx:FeelExprParser.PositiveUnaryTestDashContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#positiveUnaryTest.
-    def enterPositiveUnaryTest(self, ctx:FeelExprParser.PositiveUnaryTestContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#positiveUnaryTest.
-    def exitPositiveUnaryTest(self, ctx:FeelExprParser.PositiveUnaryTestContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#positiveUnaryTests.
-    def enterPositiveUnaryTests(self, ctx:FeelExprParser.PositiveUnaryTestsContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#positiveUnaryTests.
-    def exitPositiveUnaryTests(self, ctx:FeelExprParser.PositiveUnaryTestsContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#unaryTestsRoot.
-    def enterUnaryTestsRoot(self, ctx:FeelExprParser.UnaryTestsRootContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#unaryTestsRoot.
-    def exitUnaryTestsRoot(self, ctx:FeelExprParser.UnaryTestsRootContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#unaryTests_negated.
-    def enterUnaryTests_negated(self, ctx:FeelExprParser.UnaryTests_negatedContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#unaryTests_negated.
-    def exitUnaryTests_negated(self, ctx:FeelExprParser.UnaryTests_negatedContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#unaryTests_positive.
-    def enterUnaryTests_positive(self, ctx:FeelExprParser.UnaryTests_positiveContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#unaryTests_positive.
-    def exitUnaryTests_positive(self, ctx:FeelExprParser.UnaryTests_positiveContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#unaryTests_empty.
-    def enterUnaryTests_empty(self, ctx:FeelExprParser.UnaryTests_emptyContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#unaryTests_empty.
-    def exitUnaryTests_empty(self, ctx:FeelExprParser.UnaryTests_emptyContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#endpoint.
-    def enterEndpoint(self, ctx:FeelExprParser.EndpointContext):
+    # Exit a parse tree produced by FeelExprParser#list.
+    def exitList(self, ctx: FeelExprParser.ListContext):
         pass
 
-    # Exit a parse tree produced by FeelExprParser#endpoint.
-    def exitEndpoint(self, ctx:FeelExprParser.EndpointContext):
+    # Enter a parse tree produced by FeelExprParser#name.
+    def enterName(self, ctx: FeelExprParser.NameContext):
         pass
 
-
-    # Enter a parse tree produced by FeelExprParser#interval.
-    def enterInterval(self, ctx:FeelExprParser.IntervalContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#interval.
-    def exitInterval(self, ctx:FeelExprParser.IntervalContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#qualifiedName.
-    def enterQualifiedName(self, ctx:FeelExprParser.QualifiedNameContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#qualifiedName.
-    def exitQualifiedName(self, ctx:FeelExprParser.QualifiedNameContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#nameRef.
-    def enterNameRef(self, ctx:FeelExprParser.NameRefContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#nameRef.
-    def exitNameRef(self, ctx:FeelExprParser.NameRefContext):
-        pass
-
-
-    # Enter a parse tree produced by FeelExprParser#nameRefOtherToken.
-    def enterNameRefOtherToken(self, ctx:FeelExprParser.NameRefOtherTokenContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#nameRefOtherToken.
-    def exitNameRefOtherToken(self, ctx:FeelExprParser.NameRefOtherTokenContext):
+    # Exit a parse tree produced by FeelExprParser#name.
+    def exitName(self, ctx: FeelExprParser.NameContext):
         pass
-
-
-    # Enter a parse tree produced by FeelExprParser#reusableKeywords.
-    def enterReusableKeywords(self, ctx:FeelExprParser.ReusableKeywordsContext):
-        pass
-
-    # Exit a parse tree produced by FeelExprParser#reusableKeywords.
-    def exitReusableKeywords(self, ctx:FeelExprParser.ReusableKeywordsContext):
-        pass
-
 
 
 del FeelExprParser

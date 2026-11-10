@@ -1,247 +1,186 @@
-from bpmncwpverify.core.error import (
-    CbmcUnsupportedElementError,
-    ErrorException,
-    TypingNotCaughtError,
-)
-from bpmncwpverify.core.feel import Feel
+"""
+Turns a type-checked FEEL tree into C for the CBMC back end.
+
+A condition becomes a C expression and a behavior becomes C statements. The C
+needs <stdbool.h> and ``unsigned int nondet_uint(void);``, as the program the
+CBMC builder writes has.
+
+``choose [a, b, c]`` needs a value that is the same everywhere it is used, so
+it is hoisted: a ``unsigned int <prefix>_choose_N = nondet_uint();`` statement
+comes first, and the expression is ``(<pick> == 0 ? a : <pick> == 1 ? b : c)``.
+Any pick of ``N`` or more selects the last option, so no ``assume`` is needed
+and CBMC can reach every option. Such statements come back with the
+expression and must be placed before it.
+
+Semantics worth knowing:
+
+- ``/`` is C integer division, as every number in the state is an integer.
+- ``**`` is expanded to a product, so the exponent must be a literal
+  integer from 0 to ``MAX_POWER``.
+- The triples of a behavior run in order, one after the other.
+"""
+
+from dataclasses import dataclass
+
+from returns.result import Failure, Result, Success
+
+from bpmncwpverify.core.error import Error, FeelCbmcUnsupportedError
 from bpmncwpverify.core.feel_tree import (
-    AddNode,
-    AndNode,
-    BinaryOperatorNode,
-    BoolLiteralNode,
-    ChooseNode,
-    ComparisonOperatorNode,
-    ConditionalOperatorNode,
-    DivideNode,
-    EqualNode,
-    ExpressionNode,
+    Behavior,
+    Binary,
+    Boolean,
+    Choose,
+    FeelNode,
     FeelVisitor,
-    GENode,
-    GTNode,
-    IfNode,
-    LENode,
-    ListNode,
-    LTNode,
-    MultiplyNode,
-    NotEqualNode,
-    NotNode,
-    NumberLiteralNode,
-    OrNode,
-    QualifiedNameNode,
-    SubtractNode,
-    TripleListNode,
-    TripleNode,
-    XOrNode,
+    If,
+    ListExpr,
+    Name,
+    Negate,
+    Not,
+    Number,
+    Triple,
 )
 
+MAX_POWER = 16
+NONDET_FUNC = "nondet_uint"
 
-class FeelToCbmcVisitor(FeelVisitor):
-    """Translates a FEEL AST into CBMC C.
+_C_OPS = {
+    "and": "&&",
+    "or": "||",
+    "xor": "!=",
+    "=": "==",
+}
 
-    `expr` accumulates the expression currently being built (guard/comparison
-    text, or scratch state while building a triple's target/value). `stmts`
-    collects completed C statement lines (assignments, and any
-    `nondet_int()`/`__CPROVER_assume()` pairs a `choose(...)` needs).
+
+class _Unsupported(Exception):
+    def __init__(self, construct: str, reason: str) -> None:
+        super().__init__(construct)
+        self.error = FeelCbmcUnsupportedError(construct, reason)
+
+
+@dataclass(frozen=True)
+class CExpr:
+    """A C expression, and the statements that must come before it."""
+
+    statements: tuple[str, ...]
+    expr: str
+
+
+class FeelToCbmcVisitor(FeelVisitor[str]):
+    """
+    Visiting an expression returns its C text. The statements it needs first
+    are collected in ``statements``. Visiting a triple returns its assignment.
+    Names made for ``choose`` start with ``prefix``; use another prefix, or a
+    block, when two translations share a scope.
     """
 
-    __slots__ = ["expr", "stmts", "choose_id", "_choose_idx"]
+    def __init__(self, prefix: str = "feel") -> None:
+        self.prefix = prefix
+        self.statements: list[str] = []
+        self._count = 0
 
-    def __init__(self, choose_id: str) -> None:
-        self.expr: str = ""
-        self.stmts: list[str] = []
-        self.choose_id = choose_id
-        self._choose_idx: int = 0
+    def visit_number(self, node: Number) -> str:
+        if not isinstance(node.value, int):
+            raise _Unsupported(
+                f"the number {node.value}", "only integers can be used in C here"
+            )
+        return str(node.value)
 
-    def _render(self, node: ExpressionNode) -> str:
-        """Render `node` in isolation without disturbing the current `expr`."""
-        saved = self.expr
-        self.expr = ""
-        node.accept(self)
-        rendered = self.expr
-        self.expr = saved
-        return rendered
+    def visit_boolean(self, node: Boolean) -> str:
+        return "true" if node.value else "false"
 
-    def visit_number_literal(self, node: NumberLiteralNode) -> bool:
-        self.expr += node.value
-        return True
+    def visit_name(self, node: Name) -> str:
+        return node.name
 
-    def visit_bool_literal(self, node: BoolLiteralNode) -> bool:
-        self.expr += node.value
-        return True
+    def visit_list_expr(self, node: ListExpr) -> str:
+        raise _Unsupported("a list", "a list is only supported inside 'choose'")
 
-    def visit_qualified_name(self, node: QualifiedNameNode) -> bool:
-        self.expr += node.name
-        return True
+    def visit_negate(self, node: Negate) -> str:
+        return f"(-{self.visit(node.operand)})"
 
-    def visit_list(self, node: ListNode) -> bool:
-        self.expr += "{"
+    def visit_not(self, node: Not) -> str:
+        return f"(!{self.visit(node.operand)})"
 
-        for i, item in enumerate(node.values):
-            if i:
-                self.expr += ", "
-            item.accept(self)
+    def visit_binary(self, node: Binary) -> str:
+        if node.op == "**":
+            return self._power(node)
+        left = self.visit(node.left)
+        right = self.visit(node.right)
+        return f"({left} {_C_OPS.get(node.op, node.op)} {right})"
 
-        self.expr += "}"
-        return False
+    def visit_if(self, node: If) -> str:
+        condition = self.visit(node.condition)
+        then_branch = self.visit(node.then_branch)
+        else_branch = self.visit(node.else_branch)
+        return f"({condition} ? {then_branch} : {else_branch})"
 
-    def visit_binary_operator(self, node: BinaryOperatorNode) -> bool:
-        self.expr += "("
-        node.left.accept(self)
+    def visit_choose(self, node: Choose) -> str:
+        if not node.options:
+            raise _Unsupported("'choose'", "it has no options")
+        options = [self.visit(option) for option in node.options]
+        if len(options) == 1:
+            return options[0]
+        pick = f"{self.prefix}_choose_{self._count}"
+        self._count += 1
+        self.statements.append(f"unsigned int {pick} = {NONDET_FUNC}();")
+        result = options[-1]
+        for i in range(len(options) - 2, -1, -1):
+            result = f"{pick} == {i} ? {options[i]} : {result}"
+        return f"({result})"
 
-        match node:
-            case AddNode():
-                self.expr += " + "
-            case SubtractNode():
-                self.expr += " - "
-            case MultiplyNode():
-                self.expr += " * "
-            case DivideNode():
-                self.expr += " / "
-            case _:
-                raise ErrorException(
-                    TypingNotCaughtError(
-                        "TYPE ERROR: Type checker did not catch none valid symbol"
-                    )
-                )
+    def visit_triple(self, node: Triple) -> str:
+        return f"{node.target.name} = {self.visit(node.value)};"
 
-        node.right.accept(self)
-        self.expr += ")"
-        return False
+    def visit_behavior(self, node: Behavior) -> str:
+        return "\n".join(self.triple_lines(t) for t in node.triples)
 
-    def visit_comparision(self, node: ComparisonOperatorNode) -> bool:
-        self.expr += "("
-        node.left.accept(self)
+    def triple_lines(self, triple: Triple) -> str:
+        """The triple's statements, in a block when it needs ``choose`` variables."""
+        self.statements = []
+        assignment = self.visit_triple(triple)
+        if not self.statements:
+            return assignment
+        return "\n".join(["{", *self.statements, assignment, "}"])
 
-        match node:
-            case LTNode():
-                self.expr += " < "
-            case GTNode():
-                self.expr += " > "
-            case LENode():
-                self.expr += " <= "
-            case GENode():
-                self.expr += " >= "
-            case EqualNode():
-                self.expr += " == "
-            case NotEqualNode():
-                self.expr += " != "
-            case _:
-                raise ErrorException(
-                    TypingNotCaughtError(
-                        "TYPE ERROR: Type checker did not catch none valid symbol"
-                    )
-                )
-
-        node.right.accept(self)
-        self.expr += ")"
-        return False
-
-    def visit_conditional(self, node: ConditionalOperatorNode) -> bool:
-        self.expr += "("
-        node.left.accept(self)
-
-        match node:
-            case AndNode():
-                self.expr += " && "
-            case OrNode():
-                self.expr += " || "
-            case XOrNode():
-                # Both operands are guaranteed bool by the type checker, so
-                # C's != is exact boolean XOR — no need for Promela's
-                # (L && !R) || (!L && R) expansion.
-                self.expr += " != "
-            case _:
-                raise ErrorException(
-                    TypingNotCaughtError(
-                        "TYPE ERROR: Type checker did not catch none valid symbol"
-                    )
-                )
-
-        node.right.accept(self)
-        self.expr += ")"
-        return False
-
-    def visit_not(self, node: NotNode) -> bool:
-        self.expr += "!"
-        return True
-
-    def visit_if(self, node: IfNode) -> bool:
-        if isinstance(node.thendo, TripleNode | TripleListNode) or isinstance(
-            node.elsedo, TripleNode | TripleListNode
+    def _power(self, node: Binary) -> str:
+        exponent = node.right
+        if (
+            not isinstance(exponent, Number)
+            or not isinstance(exponent.value, int)
+            or not 0 <= exponent.value <= MAX_POWER
         ):
-            raise ErrorException(
-                CbmcUnsupportedElementError(
-                    self.choose_id,
-                    "if-expression used to conditionally assign different targets",
-                )
+            raise _Unsupported(
+                "'**'",
+                f"the exponent must be a literal integer from 0 to {MAX_POWER}",
             )
-
-        self.expr += "("
-        node.condition.accept(self)
-        self.expr += " ? "
-        node.thendo.accept(self)
-        self.expr += " : "
-        node.elsedo.accept(self)
-        self.expr += ")"
-        return False
-
-    def visit_choose(self, node: ChooseNode) -> bool:
-        t_var = f"t_choose_{self.choose_id}_{self._choose_idx}"
-        self._choose_idx += 1
-
-        value_texts = [self._render(value) for value in node.choices.values]
-
-        self.stmts.append(f"int {t_var} = nondet_int();")
-        assume = " || ".join(f"{t_var} == {value}" for value in value_texts)
-        self.stmts.append(f"__CPROVER_assume({assume});")
-
-        self.expr += t_var
-        return False
-
-    def visit_triple(self, node: TripleNode) -> bool:
-        target = self._render(node.target)
-        value = self._render(node.value)
-        self.stmts.append(f"{target} = {value};")
-        return False
-
-    def visit_triple_list(self, node: TripleListNode) -> bool:
-        for triple in node.triples:
-            triple.accept(self)
-        return False
+        if exponent.value == 0:
+            return "1"
+        base = self.visit(node.left)
+        return "(" + " * ".join([base] * exponent.value) + ")"
 
 
-def translate_feel_expr(expression: "str | Feel", owner_id: str) -> str:
-    """Render a guard/edge-condition value (Feel AST or legacy plain string) as C."""
-    if not isinstance(expression, Feel):
-        return str(expression)
-
-    visitor = FeelToCbmcVisitor(owner_id)
-    expression.ast.accept(visitor)
-
-    if visitor.stmts:
-        raise ErrorException(
-            CbmcUnsupportedElementError(
-                owner_id,
-                "Feel guard/edge expression requires preamble statements "
-                "(e.g. a nested choose()), unsupported in this position",
-            )
-        )
-
-    return visitor.expr
+def condition_to_c(node: FeelNode, prefix: str = "feel") -> Result[CExpr, Error]:
+    """A condition as a C expression, with the statements to put before it."""
+    visitor = FeelToCbmcVisitor(prefix)
+    try:
+        expr = visitor.visit(node)
+    except _Unsupported as unsupported:
+        return Failure(unsupported.error)
+    return Success(CExpr(tuple(visitor.statements), expr))
 
 
-def translate_feel_behavior(behavior: Feel, owner_id: str) -> tuple[list[str], bool]:
-    """Render a Task's FEEL behavior AST as CBMC C statement lines.
-
-    Returns (lines, always_assigns). Every supported shape here is a
-    straight-line sequence of assignments (if-as-statement-block is rejected
-    in visit_if), so always_assigns is unconditionally True.
+def behavior_to_c(
+    node: Behavior | Triple, prefix: str = "feel"
+) -> Result[tuple[str, ...], Error]:
     """
-    if not isinstance(behavior.ast, TripleNode | TripleListNode):
-        raise ErrorException(
-            CbmcUnsupportedElementError(owner_id, type(behavior.ast).__name__)
-        )
-
-    visitor = FeelToCbmcVisitor(owner_id)
-    behavior.ast.accept(visitor)
-    return visitor.stmts, True
+    C statements for a behavior, one line each. A triple that needs ``choose``
+    variables is wrapped in a block; lines that end in ``{`` or start with
+    ``}`` open and close it, as in the BPMN visitor's behaviors.
+    """
+    visitor = FeelToCbmcVisitor(prefix)
+    try:
+        triples = node.triples if isinstance(node, Behavior) else (node,)
+        text = "\n".join(visitor.triple_lines(t) for t in triples)
+    except _Unsupported as unsupported:
+        return Failure(unsupported.error)
+    return Success(tuple(text.split("\n")) if text else ())

@@ -1,228 +1,208 @@
-"""
-cwp_cbmc_visitor.py — CWP traversal for CBMC C generation.
-
-Collects CWP state and edge data, then emits two C sections:
-  1. CWP state #define constants
-  2. update_cwp_state() function — flat if/else if state transition + P1 assertion
-
-Only states with in_edges are tracked (mirrors Promela's list_of_cwp_states).
-The CWP source node (no in_edges) is collected for its outgoing-edge expressions
-but is never assigned a state ID or included in P1 checks.
-"""
+from returns.result import Failure, Result, Success
 
 from bpmncwpverify.core.cwp import Cwp, CwpEdge, CwpState, CwpVisitor
-from bpmncwpverify.visitors.feel_to_cbmc_visitor import translate_feel_expr
+from bpmncwpverify.core.error import Error
+from bpmncwpverify.util.stringmanager import (
+    NL_DOUBLE,
+    NL_SINGLE,
+    IndentAction,
+    StringManager,
+)
+from bpmncwpverify.visitors.feel_to_cbmc_visitor import condition_to_c
+
+START_STR = "//**********CWP VARIABLE DECLARATION************//"
+END_STR = "//**********************************************//"
+PRIME_SUFFIX = "_prime"
 
 
 class CwpCbmcVisitor(CwpVisitor):
+    """
+    Turns a CWP into C. The output needs <stdbool.h> and <assert.h> (the
+    builder is responsible for the includes) and defines:
+
+    - one ``bool`` per CWP state (the start state begins true, the rest false)
+    - ``void calculateState(void)``: derives each non-start state from the
+      edge expressions
+    - ``void updateState(void)``: moves along a CWP edge (or stays put) and
+      asserts that the move was valid and that exactly one state is active
+
+    An edge expression is plain C text or a type-checked FEEL tree. A FEEL
+    edge is evaluated once per function, into a ``bool edge<N>_value``, so
+    every state that uses the edge sees the same value even when it contains
+    ``choose``. A FEEL expression that cannot be expressed in C is recorded in
+    ``errors`` (use ``result()``) and leaves an ``#error`` line in the output.
+    """
+
     __slots__ = [
-        "_states",  # list[CwpState] tracked states (with in_edges), DFS order
-        "_edges",  # dict[str, CwpEdge] all edges, keyed by edge.id
-        "_visited_ids",  # set[str] visited state IDs — prevents double-visit
-        "_init_state",  # CwpState | None — first tracked state (dest of start_state)
-        "_cwp_start_state",  # CwpState | None — the CWP start_state (excluded from reachability)
+        "cwp_states",
+        "update_state_function",
+        "calculate_state_function",
+        "prime_vars",
+        "vars",
+        "proper_path_block",
+        "var_reassignment",
+        "list_of_cwp_states",
+        "_visited",
+        "_edge_numbers",
+        "_edges_defined",
+        "errors",
     ]
 
     def __init__(self) -> None:
-        self._states: list[CwpState] = []
-        self._edges: dict[str, CwpEdge] = {}
-        self._visited_ids: set[str] = set()
-        self._init_state: CwpState | None = None
-        self._cwp_start_state: CwpState | None = None
+        self.cwp_states = StringManager()
+        self.update_state_function = StringManager()
+        self.calculate_state_function = StringManager()
+        self.prime_vars = StringManager()
+        self.vars = StringManager()
+        self.proper_path_block = StringManager()
+        self.var_reassignment = StringManager()
+        self.list_of_cwp_states: list[str] = []
+        self._visited: set[str] = set()
+        self._edge_numbers: dict[str, int] = {}
+        self._edges_defined: dict[int, set[str]] = {}
+        self.errors: list[Error] = []
 
-    # ── CwpVisitor callbacks ────────────────────────────────────────────────
+    def result(self) -> Result[str, Error]:
+        if self.errors:
+            return Failure(self.errors[0])
+        return Success(repr(self))
 
-    def visit_cwp(self, model: Cwp) -> bool:
-        # The initial tracking state is the dest of the start_state's first out_edge.
-        if model.start_state.out_edges:
-            self._init_state = model.start_state.out_edges[0].dest
-        # Record the CWP start_state so it can be excluded from reachability covers.
-        # Its mapping function is always false at runtime (the Init_Edge condition
-        # conflicts with its outgoing-edge condition), so it can never be reached.
-        self._cwp_start_state = model.start_state
-        return True
+    def _feel_value(self, edge: CwpEdge, out: StringManager) -> str:
+        """Defines the FEEL edge's value in ``out`` once, and returns its name."""
+        number = self._edge_numbers.setdefault(edge.id, len(self._edge_numbers))
+        name = f"edge{number}_value"
+        defined = self._edges_defined.setdefault(id(out), set())
+        if edge.id in defined:
+            return name
+        defined.add(edge.id)
+        assert not isinstance(edge.expression, str)
+        translated = condition_to_c(edge.expression, f"edge{number}")
+        if isinstance(translated, Failure):
+            self.errors.append(translated.failure())
+            out.write_str(f"#error FEEL expression of edge {edge.id}", NL_SINGLE)
+            out.write_str(f"bool {name} = false;", NL_SINGLE)
+        else:
+            c = translated.unwrap()
+            for statement in c.statements:
+                out.write_str(statement, NL_SINGLE)
+            out.write_str(f"bool {name} = {c.expr};", NL_SINGLE)
+        return name
+
+    def _expr(self, edge: CwpEdge, out: StringManager) -> str:
+        if not isinstance(edge.expression, str):
+            return self._feel_value(edge, out)
+        # An edge with no expression places no constraint.
+        return f"({edge.expression})" if edge.expression.strip() else "true"
+
+    def _build_mapping_function(self, state: CwpState, out: StringManager) -> str:
+        in_exprs = " && ".join(self._expr(e, out) for e in state.in_edges) or "true"
+        out_exprs = " || ".join(self._expr(e, out) for e in state.out_edges) or "false"
+        return f"({in_exprs}) && !({out_exprs})"
+
+    def _build_prime_var(self, state: CwpState) -> None:
+        mapping = self._build_mapping_function(state, self.prime_vars)
+        self.prime_vars.write_str(
+            f"bool {state.name}{PRIME_SUFFIX} = {mapping};", NL_SINGLE
+        )
+
+    def _build_vars(self, state: CwpState) -> None:
+        mapping = self._build_mapping_function(state, self.vars)
+        self.vars.write_str(f"{state.name} = {mapping};", NL_SINGLE)
+
+    def _build_proper_path_block(self, state: CwpState) -> None:
+        for out_edge in state.out_edges:
+            self.proper_path_block.write_str(
+                f"|| ({state.name} && {out_edge.dest.name}{PRIME_SUFFIX})", NL_SINGLE
+            )
+
+    def _add_stationary_state(self, state: CwpState) -> None:
+        """
+        Allows the state to remain the same. We don't always need to be moving
+        through an edge.
+        """
+        self.proper_path_block.write_str(
+            f"|| ({state.name} && {state.name}{PRIME_SUFFIX})", NL_SINGLE
+        )
+
+    def _reassign_vars_to_primes(self, state: CwpState) -> None:
+        self.var_reassignment.write_str(
+            f"{state.name} = {state.name}{PRIME_SUFFIX};", NL_SINGLE
+        )
+
+    def build_XOR_block(self) -> StringManager:
+        xor = StringManager()
+        xor.write_str(
+            "// Verification of properties 1 & 2 (verifying that we are always in one state and only one state)",
+            NL_SINGLE,
+        )
+        total = " + ".join(f"(int){s}" for s in self.list_of_cwp_states) or "0"
+        xor.write_str(f"int sumOfActiveStates = {total};", NL_SINGLE)
+        xor.write_str(
+            'assert(sumOfActiveStates == 1 && "In more than one or no state");',
+            NL_SINGLE,
+        )
+        return xor
 
     def visit_state(self, state: CwpState) -> bool:
-        if state.id in self._visited_ids:
+        if state.name in self._visited:
             return False
-        self._visited_ids.add(state.id)
+        self._visited.add(state.name)
 
         if state.in_edges:
-            self._states.append(state)
+            self.list_of_cwp_states.append(state.name)
+            self.cwp_states.write_str(f"bool {state.name} = false;", NL_SINGLE)
 
-        # Collect all edges touching this state (deduplicated by ID).
-        for edge in state.in_edges + state.out_edges:
-            if edge.id not in self._edges:
-                self._edges[edge.id] = edge
+            self._build_prime_var(state)
+            self._build_vars(state)
+            self._build_proper_path_block(state)
+            self._add_stationary_state(state)
+            self._reassign_vars_to_primes(state)
+        else:
+            self.cwp_states.write_str(f"bool {state.name} = true;", NL_SINGLE)
+            self._build_proper_path_block(state)
+            self.var_reassignment.write_str(f"{state.name} = false;", NL_SINGLE)
 
         return True
+
+    def end_visit_state(self, state: CwpState) -> None:
+        pass
 
     def visit_edge(self, edge: CwpEdge) -> bool:
         return True
 
-    # ── Public properties ───────────────────────────────────────────────────
+    def end_visit_edge(self, edge: CwpEdge) -> None:
+        pass
 
-    @property
-    def num_states(self) -> int:
-        return len(self._states)
+    def create_update_state_function(self) -> None:
+        out = self.update_state_function
+        out.write_str("void updateState(void) {", NL_SINGLE, IndentAction.INC)
+        out.write_str(self.prime_vars)
 
-    def state_define_names(self) -> list[str]:
-        """Public accessor: ordered list of CWP state #define names."""
-        return [self._define_name(s) for s in self._states]
-
-    def reachable_state_define_names(self) -> list[str]:
-        """
-        CWP state #define names for the REACHABILITY block — excludes the CWP
-        start state, whose mapping function is always false at runtime (the
-        Init_Edge condition x==0 conflicts with its outgoing condition x<=5,
-        so it can never be the active CWP state in the generated C model).
-        """
-        return [
-            self._define_name(s) for s in self._states if s is not self._cwp_start_state
-        ]
-
-    # ── Name helpers ────────────────────────────────────────────────────────
-
-    def _define_name(self, state: CwpState) -> str:
-        """C #define name: CWP_<UPPERCASED_STATE_NAME>"""
-        return f"CWP_{state.name.upper()}"
-
-    def _edge_cond_var(self, edge: CwpEdge) -> str:
-        """Local bool variable name for an edge condition expression."""
-        src = edge.source.name if edge.source else "UNKNOWN"
-        dst = edge.dest.name
-        return f"e_{src}_to_{dst}"
-
-    def _mapping_function(self, state: CwpState) -> str:
-        """
-        C boolean expression: true when the CWP is in this state.
-        Logic: (AND of in-edge conditions) && !(OR of out-edge conditions)
-        Mirrors CwpPromelaVisitor._build_mapping_function().
-        """
-        in_part = (
-            " && ".join(self._edge_cond_var(e) for e in state.in_edges)
-            if state.in_edges
-            else "true"
+        out.write_str("bool validTransition = false", NL_SINGLE, IndentAction.INC)
+        out.write_str(self.proper_path_block)
+        out.write_str(";", NL_SINGLE, IndentAction.DEC)
+        out.write_str(
+            'assert(validTransition && "Not a valid CWP transition");', NL_SINGLE
         )
-        out_part = (
-            " || ".join(self._edge_cond_var(e) for e in state.out_edges)
-            if state.out_edges
-            else "false"
-        )
-        return f"({in_part}) && !({out_part})"
 
-    # ── Code-generation methods ─────────────────────────────────────────────
+        out.write_str(self.var_reassignment)
+        out.write_str(self.build_XOR_block())
+        out.write_str("}", NL_SINGLE, IndentAction.DEC)
 
-    def initial_cwp_state_define(self) -> str:
-        """Returns the #define name of the initial CWP tracking state."""
-        if self._init_state is not None and self._init_state in self._states:
-            return self._define_name(self._init_state)
-        if self._states:
-            return self._define_name(self._states[0])
-        return "0"
+    def create_calculate_state_function(self) -> None:
+        out = self.calculate_state_function
+        out.write_str("void calculateState(void) {", NL_SINGLE, IndentAction.INC)
+        out.write_str(self.vars)
+        out.write_str("}", NL_SINGLE, IndentAction.DEC)
 
-    def cwp_reached_init_expr(self) -> str:
-        """
-        C initializer for cwp_reached[].
-        Only the initial tracking state (dest of start_state's first out-edge) starts
-        as reached; the CWP start_state itself is never actually entered by the model
-        (its mapping function is always false at runtime).
-        """
-        values = ["false"] * len(self._states)
-        if self._init_state is not None and self._init_state in self._states:
-            values[self._states.index(self._init_state)] = "true"
-        return "{" + ", ".join(values) + "}"
+    def visit_cwp(self, model: Cwp) -> bool:
+        self.cwp_states.write_str(START_STR, NL_SINGLE)
+        return True
 
-    def generate_state_defines(self) -> str:
-        """Emit: #define CWP_<NAME> N  for each tracked state, plus CWP_NUM_STATES."""
-        lines = [
-            "/* ── CWP state IDs ─────────────────────────────────────────────────────── */"
-        ]
-        for i, state in enumerate(self._states):
-            lines.append(f"#define {self._define_name(state):<28} {i}")
-        lines.append(f"#define {'CWP_NUM_STATES':<28} {len(self._states)}")
-        return "\n".join(lines) + "\n"
+    def end_visit_cwp(self, model: Cwp) -> None:
+        self.cwp_states.write_str(END_STR, NL_DOUBLE)
+        self.create_update_state_function()
+        self.create_calculate_state_function()
 
-    def generate_update_cwp_state(self, var_params: list[str]) -> str:
-        """
-        Emit the update_cwp_state() C function.
-
-        var_params: list of C parameter declarations for the data variables,
-                    e.g. ["int x"] or ["int terms", "int paymentOffered", ...].
-        """
-        lines: list[str] = []
-
-        # ── signature ──
-        params = ", ".join(["int *cwp_state", "bool cwp_reached[]"] + var_params)
-        lines.append("/* out: cwp_state, cwp_reached */")
-        lines.append(f"static void update_cwp_state({params})")
-        lines.append("{")
-        lines.append("    int old_state = *cwp_state;")
-        lines.append("")
-
-        # ── edge condition booleans ──
-        lines.append("    /* CWP edge conditions */")
-        emitted_edges: set[str] = set()
-        for edge in self._edges.values():
-            if edge.id not in emitted_edges and edge.expression:
-                emitted_edges.add(edge.id)
-                var = self._edge_cond_var(edge)
-                expr_text = translate_feel_expr(edge.expression, edge.id)
-                lines.append(f"    bool {var} = ({expr_text});")
-        lines.append("")
-
-        # ── next-state booleans (mapping function per tracked state) ──
-        lines.append("    /* Next state: mapping function per CWP state */")
-        for state in self._states:
-            mapping = self._mapping_function(state)
-            lines.append(f"    bool next_{state.name} = {mapping};")
-        lines.append("")
-
-        # ── priority ternary: terminal states first (no out_edges) ──
-        terminals = [s for s in self._states if not s.out_edges]
-        non_terminals = [s for s in self._states if s.out_edges]
-        priority_order = terminals + non_terminals
-
-        if priority_order:
-            # Build the chained ternary, one state per line.
-            ternary_parts = [
-                f"next_{s.name} ? {self._define_name(s)}" for s in priority_order
-            ]
-            # Last fallback: stay in current state.
-            indent = " " * 20
-            chain = f"\n{indent}: ".join(ternary_parts)
-            chain += f"\n{indent}: old_state;"
-            lines.append(f"    int new_state = {chain}")
-        else:
-            lines.append("    int new_state = old_state;")
-        lines.append("")
-
-        # ── P1: valid transition assertion ──
-        lines.append(
-            "    /* P1: transition follows a valid CWP edge (or stays in same state) */"
-        )
-        p1_cases: list[str] = []
-        # Self-loops for every tracked state.
-        for state in self._states:
-            dn = self._define_name(state)
-            p1_cases.append(f"(old_state == {dn} && new_state == {dn})")
-        # Forward edges whose source is a tracked state (has in_edges).
-        for edge in self._edges.values():
-            if edge.source and edge.source.in_edges:
-                src_dn = self._define_name(edge.source)
-                dst_dn = self._define_name(edge.dest)
-                if src_dn != dst_dn:
-                    p1_cases.append(f"(old_state == {src_dn} && new_state == {dst_dn})")
-        p1_expr = " ||\n        ".join(p1_cases)
-        lines.append("    __CPROVER_assert(")
-        lines.append(f"        {p1_expr},")
-        lines.append('        "CWP P1: transition follows valid CWP edge");')
-        lines.append("")
-
-        # ── commit ──
-        lines.append("    /* Commit */")
-        lines.append("    *cwp_state             = new_state;")
-        lines.append("    cwp_reached[new_state] = true;")
-        lines.append("}")
-
-        return "\n".join(lines) + "\n"
+    def __repr__(self) -> str:
+        return f"{self.cwp_states}{self.update_state_function}{self.calculate_state_function}"

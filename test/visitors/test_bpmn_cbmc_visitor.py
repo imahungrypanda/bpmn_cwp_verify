@@ -1,691 +1,544 @@
-# type: ignore
-"""
-Unit tests for BpmnCbmcVisitor.
-
-Follows the same mock-heavy, fixture-per-method pattern used in
-test_bpmn_promela_visitor.py — no real BPMN parsing; node objects are
-constructed via mocker.Mock(spec=...).
-"""
+import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
+from returns.result import Failure, Success
+from returns.unsafe import unsafe_perform_io
 
+from bpmncwpverify.builder.cbmc_builder import CbmcBuilder
+from bpmncwpverify.core.accessmethods import bpmnmethods
+from bpmncwpverify.core.accessmethods.cwpmethods import CwpXmlParser
 from bpmncwpverify.core.bpmn import (
+    Bpmn,
     EndEvent,
     ExclusiveGatewayNode,
     IntermediateEvent,
+    MessageFlow,
+    Node,
     ParallelGatewayNode,
+    Process,
     SequenceFlow,
     StartEvent,
     Task,
 )
-from bpmncwpverify.core.error import CbmcUnsupportedElementError, ErrorException
-from bpmncwpverify.core.feel import Feel
-from bpmncwpverify.core.feel_tree import (
-    ChooseNode,
-    ListNode,
-    NumberLiteralNode,
-    QualifiedNameNode,
+from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedElementError,
+    BpmnSeqFlowNoExprError,
+    FeelCbmcUnsupportedError,
 )
-from bpmncwpverify.visitors.bpmn_cbmc_visitor import BpmnCbmcVisitor
+from bpmncwpverify.core.feel import parse_behavior, parse_expression
+from bpmncwpverify.core.state import State
+from bpmncwpverify.util.file import element_tree_from_string
+from bpmncwpverify.visitors.bpmn_cbmc_visitor import CbmcBpmnGenVisitor
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+FEEL = "./test/resources/feel/"
 
 
-def make_flow(mocker, source_id: str, target_id: str, fid: str, expression: str = ""):
-    """Build a minimal SequenceFlow mock."""
-    flow = mocker.Mock(spec=SequenceFlow)
-    flow.id = fid
-    flow.expression = expression
-    src = mocker.Mock()
-    src.id = source_id
-    tgt = mocker.Mock()
-    tgt.id = target_id
-    flow.source_node = src
-    flow.target_node = tgt
+def seq(src: Node, dst: Node, expr: str = "") -> SequenceFlow:
+    flow = SequenceFlow(f"{src.id}_{dst.id}", "flow")
+    flow.source_node, flow.target_node = src, dst
+    flow.expression = expr
+    src.add_out_flow(flow)
+    dst.add_in_flow(flow)
     return flow
 
 
-@pytest.fixture
-def visitor():
-    return BpmnCbmcVisitor()
+def msg(src: Node, dst: Node) -> MessageFlow:
+    flow = MessageFlow(f"m_{src.id}_{dst.id}", "msg")
+    flow.source_node, flow.target_node = src, dst
+    src.add_out_msg(flow)
+    dst.add_in_msg(flow)
+    return flow
 
 
-# ── name helpers ──────────────────────────────────────────────────────────────
+def start(id: str = "S") -> StartEvent:
+    return StartEvent(id, id, "", "")
 
 
-def test_flow_place_name(mocker):
-    flow = make_flow(mocker, "SRC", "TGT", "f1")
-    assert BpmnCbmcVisitor._flow_place_name(flow) == "p_TGT_FROM_SRC"
+def end(id: str = "E") -> EndEvent:
+    return EndEvent(id, id, "", "")
 
 
-def test_start_place_name(mocker):
-    event = mocker.Mock(spec=StartEvent)
-    event.id = "start_1"
-    assert BpmnCbmcVisitor._start_place_name(event) == "p_start_1"
+def catch(id: str) -> IntermediateEvent:
+    return IntermediateEvent(id, id, "", "", "catch")
 
 
-def test_transition_define_name_no_flow(mocker):
-    node = mocker.Mock()
-    node.id = "task_A"
-    assert BpmnCbmcVisitor._transition_define_name(node, None) == "T_task_A"
+def make_bpmn(*processes: tuple[str, list[Node]]) -> Bpmn:
+    bpmn = Bpmn()
+    for pid, nodes in processes:
+        process = Process(pid, pid)
+        for node in nodes:
+            process[node.id] = node
+        bpmn.processes[pid] = process
+    return bpmn
 
 
-def test_transition_define_name_with_flow(mocker):
-    node = mocker.Mock()
-    node.id = "gw_1"
-    flow = mocker.Mock(spec=SequenceFlow)
-    flow.id = "flow_X"
-    assert BpmnCbmcVisitor._transition_define_name(node, flow) == "T_flow_X"
+def generate(bpmn: Bpmn) -> CbmcBpmnGenVisitor:
+    visitor = CbmcBpmnGenVisitor()
+    bpmn.accept(visitor)
+    return visitor
 
 
-def test_enable_var_name_no_flow(mocker):
-    node = mocker.Mock()
-    node.id = "task_A"
-    assert BpmnCbmcVisitor._enable_var_name(node, None) == "en_task_A"
+def linear() -> Bpmn:
+    s, t, e = start(), Task("T", "T", ""), end()
+    seq(s, t)
+    seq(t, e)
+    return make_bpmn(("P", [s, t, e]))
 
 
-def test_enable_var_name_with_flow(mocker):
-    node = mocker.Mock()
-    flow = mocker.Mock(spec=SequenceFlow)
-    flow.id = "flow_X"
-    assert BpmnCbmcVisitor._enable_var_name(node, flow) == "en_flow_X"
+def test_start_task_end():
+    visitor = generate(linear())
+    code = repr(visitor)
+    assert visitor.result() == Success(code)
+    assert visitor.process_ids == ["P"]
+    assert "static unsigned char S = 0;" in code
+    assert "static unsigned char T_FROM_S = 0;" in code
+    assert "static unsigned char E_FROM_T = 0;" in code
+    assert "static bool S_step(void)" in code
+    assert "if (!((hasToken(S)))) return false;" in code
+    assert "static void T_BehaviorModel(void)" in code
+    assert "T_BehaviorModel();" in code
+    assert "consumeToken(T_FROM_S);" in code
+    assert "putToken(E_FROM_T);" in code
+    assert "P_done = true;" in code
+    assert "bool P_step(void)" in code
+    assert "void P_init(void)" in code
+    assert "putToken(S);" in code
 
 
-# ── enable expressions ────────────────────────────────────────────────────────
+def test_start_with_incoming_flow_not_initialised():
+    s, e = start(), end()
+    seq(s, e)
+    visitor = generate(make_bpmn(("P", [s, e])))
+    init = repr(visitor.inits)
+    assert "putToken(S);" in init
 
 
-def test_enable_expr_start_event(visitor, mocker):
-    event = mocker.Mock(spec=StartEvent)
-    event.id = "ev_start"
-    assert visitor._enable_expr(event, None) == "p_ev_start"
-
-
-def test_enable_expr_task_single_in_flow(visitor, mocker):
-    task = mocker.Mock(spec=Task)
-    task.id = "task_1"
-    src = mocker.Mock()
-    src.id = "start_1"
-    flow = mocker.Mock(spec=SequenceFlow)
-    flow.source_node = src
-    task.in_flows = [flow]
-    assert visitor._enable_expr(task, None) == "p_task_1_FROM_start_1"
-
-
-def test_enable_expr_task_multiple_in_flows(visitor, mocker):
-    task = mocker.Mock(spec=Task)
-    task.id = "task_1"
-    src1 = mocker.Mock()
-    src1.id = "gw_A"
-    src2 = mocker.Mock()
-    src2.id = "gw_B"
-    f1 = mocker.Mock(spec=SequenceFlow)
-    f1.source_node = src1
-    f2 = mocker.Mock(spec=SequenceFlow)
-    f2.source_node = src2
-    task.in_flows = [f1, f2]
-    assert (
-        visitor._enable_expr(task, None) == "p_task_1_FROM_gw_A || p_task_1_FROM_gw_B"
+def test_message_start_event_waits_for_message():
+    sender, send_end = start("S1"), end("E1")
+    seq(sender, send_end)
+    receiver, recv_end = start("S2"), end("E2")
+    seq(receiver, recv_end)
+    msg(sender, receiver)
+    visitor = generate(
+        make_bpmn(("P1", [sender, send_end]), ("P2", [receiver, recv_end]))
     )
+    code = repr(visitor)
+    assert "static unsigned char S2_FROM_S1 = 0;" in code
+    assert "hasToken(S2_FROM_S1)" in code
+    assert "putToken(S2_FROM_S1);" in code
+    assert "putToken(S2);" not in code
+    assert visitor.process_ids == ["P1", "P2"]
 
 
-def test_enable_expr_xor_gateway_no_expression(visitor, mocker):
-    gw = mocker.Mock(spec=ExclusiveGatewayNode)
-    gw.id = "gw_1"
-    src = mocker.Mock()
-    src.id = "task_A"
-    in_flow = mocker.Mock(spec=SequenceFlow)
-    in_flow.source_node = src
-    gw.in_flows = [in_flow]
-    out_flow = mocker.Mock(spec=SequenceFlow)
-    out_flow.expression = ""
-    assert visitor._enable_expr(gw, out_flow) == "(p_gw_1_FROM_task_A)"
+def test_intermediate_catch_needs_flow_and_message():
+    s, c, e = start(), catch("C"), end()
+    seq(s, c)
+    seq(c, e)
+    other = start("O")
+    other_end = end("OE")
+    seq(other, other_end)
+    msg(other, c)
+    visitor = generate(make_bpmn(("P", [s, c, e]), ("Q", [other, other_end])))
+    code = repr(visitor)
+    assert "(hasToken(C_FROM_S)) && (hasToken(C_FROM_O))" in code
+    assert "consumeToken(C_FROM_O);" in code
+    assert visitor.errors == []
 
 
-def test_enable_expr_xor_gateway_with_expression(visitor, mocker):
-    gw = mocker.Mock(spec=ExclusiveGatewayNode)
-    gw.id = "gw_1"
-    src = mocker.Mock()
-    src.id = "task_A"
-    in_flow = mocker.Mock(spec=SequenceFlow)
-    in_flow.source_node = src
-    gw.in_flows = [in_flow]
-    out_flow = mocker.Mock(spec=SequenceFlow)
-    out_flow.expression = "x > 5"
-    assert visitor._enable_expr(gw, out_flow) == "(p_gw_1_FROM_task_A) && (x > 5)"
+def test_intermediate_throw_sends_message():
+    s, t, e = start(), IntermediateEvent("T", "T", "", "", "throw"), end()
+    seq(s, t)
+    seq(t, e)
+    r, re_ = start("R"), end("RE")
+    seq(r, re_)
+    msg(t, r)
+    code = repr(generate(make_bpmn(("P", [s, t, e]), ("Q", [r, re_]))))
+    assert "putToken(R_FROM_T);" in code
 
 
-def test_enable_expr_xor_gateway_with_feel_expression(visitor, mocker):
-    gw = mocker.Mock(spec=ExclusiveGatewayNode)
-    gw.id = "gw_1"
-    src = mocker.Mock()
-    src.id = "task_A"
-    in_flow = mocker.Mock(spec=SequenceFlow)
-    in_flow.source_node = src
-    gw.in_flows = [in_flow]
-    out_flow = mocker.Mock(spec=SequenceFlow)
-    out_flow.expression = Feel.parse("x > 5")
-    out_flow.id = "flow_1"
-    # visit_comparision already parenthesizes its own output, so this is
-    # double-wrapped compared to the plain-str sibling test above — harmless,
-    # semantically identical C.
-    assert visitor._enable_expr(gw, out_flow) == "(p_gw_1_FROM_task_A) && ((x > 5))"
-
-
-def test_enable_expr_xor_gateway_with_feel_expression_choose_raises(visitor, mocker):
-    gw = mocker.Mock(spec=ExclusiveGatewayNode)
-    gw.id = "gw_1"
-    src = mocker.Mock()
-    src.id = "task_A"
-    in_flow = mocker.Mock(spec=SequenceFlow)
-    in_flow.source_node = src
-    gw.in_flows = [in_flow]
-    out_flow = mocker.Mock(spec=SequenceFlow)
-    out_flow.expression = Feel(
-        ChooseNode(ListNode([QualifiedNameNode("a"), QualifiedNameNode("b")]))
+def test_exclusive_gateway_merge_and_choice():
+    s, g, a, b, m, e = (
+        start(),
+        ExclusiveGatewayNode("G", "G"),
+        Task("A", "A", ""),
+        Task("B", "B", ""),
+        ExclusiveGatewayNode("M", "M"),
+        end(),
     )
-    out_flow.id = "flow_1"
-
-    with pytest.raises(ErrorException) as excinfo:
-        visitor._enable_expr(gw, out_flow)
-
-    assert isinstance(excinfo.value.error, CbmcUnsupportedElementError)
-
-
-# ── visitor callbacks ─────────────────────────────────────────────────────────
-
-
-def test_visit_start_event_registers_place_and_transition(visitor, mocker):
-    event = mocker.Mock(spec=StartEvent)
-    event.id = "ev_start"
-    result = visitor.visit_start_event(event)
-    assert result is True
-    assert "p_ev_start" in visitor._places
-    assert visitor._places["p_ev_start"] is True
-    assert len(visitor._transitions) == 1
-    assert visitor._transitions[0] == (event, None)
-
-
-def test_visit_start_event_deduplicates(visitor, mocker):
-    event = mocker.Mock(spec=StartEvent)
-    event.id = "ev_start"
-    visitor.visit_start_event(event)
-    result = visitor.visit_start_event(event)
-    assert result is False
-    assert len(visitor._transitions) == 1
+    seq(s, g)
+    seq(g, a, "x > 1")
+    seq(g, b, "x\n<= 1")
+    seq(a, m)
+    seq(b, m)
+    seq(m, e, "true")
+    visitor = generate(make_bpmn(("P", [s, g, a, b, m, e])))
+    code = repr(visitor)
+    assert visitor.errors == []
+    assert "bool guard0 = (x > 1);" in code
+    assert "bool guard1 = (x <= 1);" in code
+    assert "No viable path to take" in code
+    assert "__CPROVER_assume((pick == 0 && guard0) || (pick == 1 && guard1));" in code
+    assert "if (pick == 0) putToken(A_FROM_G);" in code
+    assert "if (pick == 1) putToken(B_FROM_G);" in code
+    # merge gateway: either incoming token enables it
+    assert "(hasToken(M_FROM_A) || hasToken(M_FROM_B))" in code
+    # each element is generated once even though it is reachable twice
+    assert code.count("static bool M_step(void)") == 1
 
 
-def test_visit_task_registers_transition(visitor, mocker):
-    task = mocker.Mock(spec=Task)
-    task.id = "task_1"
-    result = visitor.visit_task(task)
-    assert result is True
-    assert visitor._transitions[0] == (task, None)
+def test_gateway_flow_without_expression_is_an_error():
+    s, g, a, e = start(), ExclusiveGatewayNode("G", "G"), Task("A", "A", ""), end()
+    seq(s, g)
+    seq(g, a)
+    seq(a, e)
+    visitor = generate(make_bpmn(("P", [s, g, a, e])))
+    assert isinstance(visitor.errors[0], BpmnSeqFlowNoExprError)
+    assert isinstance(visitor.result(), Failure)
 
 
-def test_visit_task_deduplicates(visitor, mocker):
-    task = mocker.Mock(spec=Task)
-    task.id = "task_1"
-    visitor.visit_task(task)
-    result = visitor.visit_task(task)
-    assert result is False
-    assert len(visitor._transitions) == 1
-
-
-def test_visit_exclusive_gateway_one_transition_per_out_flow(visitor, mocker):
-    gw = mocker.Mock(spec=ExclusiveGatewayNode)
-    gw.id = "gw_1"
-    f1 = mocker.Mock(spec=SequenceFlow)
-    f1.id = "flow_A"
-    f2 = mocker.Mock(spec=SequenceFlow)
-    f2.id = "flow_B"
-    gw.out_flows = [f1, f2]
-    result = visitor.visit_exclusive_gateway(gw)
-    assert result is True
-    assert len(visitor._transitions) == 2
-    assert visitor._transitions[0] == (gw, f1)
-    assert visitor._transitions[1] == (gw, f2)
-
-
-def test_visit_end_event_registers_transition_and_id(visitor, mocker):
-    event = mocker.Mock(spec=EndEvent)
-    event.id = "ev_end"
-    result = visitor.visit_end_event(event)
-    assert result is True
-    assert visitor._transitions[0] == (event, None)
-    assert "ev_end" in visitor._end_event_ids
-
-
-def test_visit_sequence_flow_registers_place(visitor, mocker):
-    flow = make_flow(mocker, "SRC", "TGT", "f1")
-    visitor.visit_sequence_flow(flow)
-    assert "p_TGT_FROM_SRC" in visitor._places
-    assert visitor._places["p_TGT_FROM_SRC"] is False
-
-
-def test_visit_sequence_flow_does_not_overwrite_existing(visitor, mocker):
-    flow = make_flow(mocker, "SRC", "TGT", "f1")
-    visitor._places["p_TGT_FROM_SRC"] = True  # pre-set
-    visitor.visit_sequence_flow(flow)
-    assert visitor._places["p_TGT_FROM_SRC"] is True
-
-
-def test_visit_parallel_gateway_registers_transition(visitor, mocker):
-    # Parallel gateways are supported (added in Sprint 1) — one transition regardless of fork/join.
-    gw = mocker.Mock(spec=ParallelGatewayNode)
-    gw.id = "gw_par"
-    gw.is_fork = True
-    result = visitor.visit_parallel_gateway(gw)
-    assert result is True
-    assert visitor.error is None
-    assert len(visitor._transitions) == 1
-    assert visitor._transitions[0] == (gw, None)
-
-
-def test_visit_parallel_gateway_deduplicates(visitor, mocker):
-    gw = mocker.Mock(spec=ParallelGatewayNode)
-    gw.id = "gw_par"
-    gw.is_fork = True
-    visitor.visit_parallel_gateway(gw)
-    result = visitor.visit_parallel_gateway(gw)
-    assert result is False
-    assert len(visitor._transitions) == 1
-
-
-def test_visit_intermediate_event_registers_transition(visitor, mocker):
-    event = mocker.Mock(spec=IntermediateEvent)
-    event.id = "ev_int"
-    result = visitor.visit_intermediate_event(event)
-    assert result is True
-    assert visitor.error is None
-    assert len(visitor._transitions) == 1
-    assert visitor._transitions[0] == (event, None)
-
-
-def test_visit_intermediate_event_deduplicates(visitor, mocker):
-    event = mocker.Mock(spec=IntermediateEvent)
-    event.id = "ev_int"
-    visitor.visit_intermediate_event(event)
-    result = visitor.visit_intermediate_event(event)
-    assert result is False
-    assert len(visitor._transitions) == 1
-
-
-# ── transition body ───────────────────────────────────────────────────────────
-
-
-def test_transition_body_start_event(visitor, mocker):
-    event = mocker.Mock(spec=StartEvent)
-    event.id = "ev_start"
-    out_flow = make_flow(mocker, "ev_start", "task_1", "f_out")
-    event.out_flows = [out_flow]
-    lines = visitor._transition_body(event, None, [])
-    assert "p_ev_start = false;" in lines[0]
-    assert "p_task_1_FROM_ev_start = true;" in lines[1]
-
-
-def test_transition_body_task_with_behavior(visitor, mocker):
-    task = mocker.Mock(spec=Task)
-    task.id = "task_1"
-    task.behavior = "x = x + 1"
-    in_flow = make_flow(mocker, "ev_start", "task_1", "f_in")
-    out_flow = make_flow(mocker, "task_1", "gw_1", "f_out")
-    task.in_flows = [in_flow]
-    task.out_flows = [out_flow]
-    lines = visitor._transition_body(task, None, ["x"])
-    assert any("p_task_1_FROM_ev_start = false;" in line for line in lines)
-    assert any("x = x + 1;" in line for line in lines)
-    assert any("p_gw_1_FROM_task_1 = true;" in line for line in lines)
-    assert any(
-        "update_cwp_state(&cwp_state, cwp_reached, x);" in line for line in lines
+def fork_join() -> Bpmn:
+    s, f, a, b, j, e = (
+        start(),
+        ParallelGatewayNode("F", "F"),
+        Task("A", "A", ""),
+        Task("B", "B", ""),
+        ParallelGatewayNode("J", "J"),
+        end(),
     )
+    seq(s, f)
+    seq(f, a)
+    seq(f, b)
+    seq(a, j)
+    seq(b, j)
+    seq(j, e)
+    return make_bpmn(("P", [s, f, a, b, j, e]))
 
 
-def test_transition_body_task_with_promela_behavior(visitor, mocker):
-    task = mocker.Mock(spec=Task)
-    task.id = "task_1"
-    task.behavior = "if\n:: true -> terms = agreed\n:: true -> terms = failed\nfi"
-    in_flow = make_flow(mocker, "ev_start", "task_1", "f_in")
-    out_flow = make_flow(mocker, "task_1", "gw_1", "f_out")
-    task.in_flows = [in_flow]
-    task.out_flows = [out_flow]
-    lines = visitor._transition_body(task, None, ["terms"])
-    assert any("int t = nondet_int();" in line for line in lines)
-    assert any(
-        "__CPROVER_assume(t == agreed || t == failed);" in line for line in lines
+def test_parallel_fork_and_join():
+    visitor = generate(fork_join())
+    code = repr(visitor)
+    assert visitor.errors == []
+    assert "if (!((hasToken(F_FROM_S)))) return false;" in code
+    assert "putToken(A_FROM_F);" in code
+    assert "putToken(B_FROM_F);" in code
+    assert "if (!((hasToken(J_FROM_A) && hasToken(J_FROM_B)))) return false;" in code
+    assert "consumeToken(J_FROM_A);" in code
+    assert "consumeToken(J_FROM_B);" in code
+    assert "putToken(E_FROM_J);" in code
+    assert code.count("static bool J_step(void)") == 1
+
+
+def test_nested_parallel_gateways():
+    s, f1, f2, a, b, c, j2, j1, e = (
+        start(),
+        ParallelGatewayNode("F1", "F1"),
+        ParallelGatewayNode("F2", "F2"),
+        Task("A", "A", ""),
+        Task("B", "B", ""),
+        Task("C", "C", ""),
+        ParallelGatewayNode("J2", "J2"),
+        ParallelGatewayNode("J1", "J1"),
+        end(),
     )
-    assert any("terms = t;" in line for line in lines)
-    assert any(
-        "update_cwp_state(&cwp_state, cwp_reached, terms);" in line for line in lines
+    seq(s, f1)
+    seq(f1, f2)
+    seq(f1, c)
+    seq(f2, a)
+    seq(f2, b)
+    seq(a, j2)
+    seq(b, j2)
+    seq(j2, j1)
+    seq(c, j1)
+    seq(j1, e)
+    visitor = generate(make_bpmn(("P", [s, f1, f2, a, b, c, j2, j1, e])))
+    code = repr(visitor)
+    assert visitor.errors == []
+    assert "putToken(F2_FROM_F1);" in code
+    assert "putToken(C_FROM_F1);" in code
+    assert "hasToken(J2_FROM_A) && hasToken(J2_FROM_B)" in code
+    assert "hasToken(J1_FROM_J2) && hasToken(J1_FROM_C)" in code
+
+
+def test_parallel_gateway_with_message_is_an_error():
+    s, p, e = start(), ParallelGatewayNode("PG", "PG"), end()
+    seq(s, p)
+    seq(p, e)
+    o, oe = start("O"), end("OE")
+    seq(o, oe)
+    msg(o, p)
+    visitor = generate(make_bpmn(("P", [s, p, e]), ("Q", [o, oe])))
+    error = visitor.result().failure()
+    assert isinstance(error, BpmnCbmcUnsupportedElementError)
+    assert error.element_id == "PG"
+
+
+def behavior_code(behavior: str):
+    s, t, e = start(), Task("T", "T", behavior), end()
+    seq(s, t)
+    seq(t, e)
+    visitor = generate(make_bpmn(("P", [s, t, e])))
+    return visitor, repr(visitor.behaviors)
+
+
+def test_behavior_assignments():
+    visitor, code = behavior_code("x = 1\ny = x + 2; z = y\nskip\nupdateState()")
+    assert visitor.errors == []
+    assert "x = 1;" in code
+    assert "y = x + 2;" in code
+    assert "z = y;" in code
+    assert "skip" not in code
+    assert "updateState();" in code
+    assert "void updateState(void);" in code
+
+
+def test_empty_behavior():
+    visitor, code = behavior_code("")
+    assert visitor.errors == []
+    assert "static void T_BehaviorModel(void) {" in code
+    assert "updateState" not in code
+
+
+def test_behavior_assert_and_comparison():
+    _, code = behavior_code("assert(x != y)\nassert(x == 1 || y >= 2)")
+    assert "assert(x != y);" in code
+    assert "assert(x == 1 || y >= 2);" in code
+
+
+def test_behavior_if_with_guards_and_else():
+    visitor, code = behavior_code(
+        "if\n"
+        ":: x == a -> y = b\n"
+        ":: (x != a) && (y == b) -> y = a; x = b\n"
+        ":: else -> skip\n"
+        "fi\n"
+        "updateState()"
     )
-    # Raw Promela syntax must NOT appear verbatim in the output.
-    assert not any(":: true" in line for line in lines)
-    assert not any(line.strip() == "if" for line in lines)
-    assert not any(line.strip() == "fi" for line in lines)
+    assert visitor.errors == []
+    assert "bool if0_guard0 = (x == a);" in code
+    assert "bool if0_guard1 = ((x != a) && (y == b));" in code
+    assert "bool if0_guard2 = (!((x == a) || ((x != a) && (y == b))));" in code
+    assert "__CPROVER_assume(" in code
+    assert "if (if0_pick == 0) {" in code
+    assert "y = b;" in code
+    assert "x = b;" in code
+    assert code.index("}") < code.index("updateState();")
 
 
-def test_transition_body_task_with_feel_behavior(visitor, mocker):
-    task = mocker.Mock(spec=Task)
-    task.id = "task_1"
-    task.behavior = Feel.parse("(x, [], 1)")
-    in_flow = make_flow(mocker, "ev_start", "task_1", "f_in")
-    out_flow = make_flow(mocker, "task_1", "gw_1", "f_out")
-    task.in_flows = [in_flow]
-    task.out_flows = [out_flow]
-    lines = visitor._transition_body(task, None, ["x"])
-    assert any("p_task_1_FROM_ev_start = false;" in line for line in lines)
-    assert any("x = 1;" in line for line in lines)
-    assert any("p_gw_1_FROM_task_1 = true;" in line for line in lines)
-    assert any(
-        "update_cwp_state(&cwp_state, cwp_reached, x);" in line for line in lines
+def test_behavior_nested_if_and_true_guard():
+    visitor, code = behavior_code(
+        "if\n:: true ->\n  if\n  :: x == 1 -> y = 2\n  :: else -> y = 3\n  fi\nfi"
     )
+    assert visitor.errors == []
+    assert "bool if1_guard0 = (true);" in code
+    assert "bool if0_guard0 = (x == 1);" in code
+    assert "y = 3;" in code
 
 
-def test_transition_body_task_with_feel_behavior_choose(visitor, mocker):
-    task = mocker.Mock(spec=Task)
-    task.id = "task_1"
-    task.behavior = Feel.parse("(terms, [], choose [agreed, failed])")
-    in_flow = make_flow(mocker, "ev_start", "task_1", "f_in")
-    out_flow = make_flow(mocker, "task_1", "gw_1", "f_out")
-    task.in_flows = [in_flow]
-    task.out_flows = [out_flow]
-    lines = visitor._transition_body(task, None, ["terms"])
+@pytest.mark.parametrize(
+    "behavior", ["if\n:: true -> x = 1", "fi", "do\n:: x = 1\nod", "goto end"]
+)
+def test_unsupported_behavior_is_an_error(behavior):
+    visitor, _ = behavior_code(behavior)
+    error = visitor.result().failure()
+    assert isinstance(error, BpmnCbmcUnsupportedElementError)
+    assert error.element_id == "T"
 
-    assert any("int t_choose_task_1_0 = nondet_int();" in line for line in lines)
-    assert any(
-        "__CPROVER_assume(t_choose_task_1_0 == agreed || t_choose_task_1_0 == failed);"
-        in line
-        for line in lines
+
+@pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc not installed")
+def test_fork_join_and_behaviors_in_cbmc(tmp_path):
+    s, f, a, b, j, e = (
+        start(),
+        ParallelGatewayNode("F", "F"),
+        Task("A", "A", "x = x + 1"),
+        Task("B", "B", "if\n:: x == 0 -> y = 5\n:: else -> y = 7\nfi"),
+        ParallelGatewayNode("J", "J"),
+        end(),
     )
-    assert any("terms = t_choose_task_1_0;" in line for line in lines)
-    assert any(
-        "update_cwp_state(&cwp_state, cwp_reached, terms);" in line for line in lines
+    seq(s, f)
+    seq(f, a)
+    seq(f, b)
+    seq(a, j)
+    seq(b, j)
+    seq(j, e)
+    code = repr(generate(make_bpmn(("P", [s, f, a, b, j, e]))))
+    harness = (
+        "int x = 0;\nint y = 0;\n"
+        f"{code}"
+        "int main(void) {\n"
+        "\tP_init();\n"
+        "\tfor (int i = 0; i < 8; i++) P_step();\n"
+        "\tassert(P_done);\n"
+        "\tassert(x == 1);\n"
+        "\tassert(y == 5 || y == 7);\n"
+        "\treturn 0;\n"
+        "}\n"
     )
-
-    # nondet_int/assume must appear before the assignment that uses them.
-    nondet_idx = next(i for i, line in enumerate(lines) if "nondet_int()" in line)
-    assign_idx = next(
-        i for i, line in enumerate(lines) if "terms = t_choose_task_1_0;" in line
+    path = tmp_path / "model.c"
+    path.write_text(harness)
+    run = subprocess.run(
+        ["cbmc", str(path), "--unwind", "9"],
+        check=False,
+        capture_output=True,
+        text=True,
     )
-    assert nondet_idx < assign_idx
+    assert "VERIFICATION SUCCESSFUL" in run.stdout, run.stdout
 
 
-def test_transition_body_task_with_feel_behavior_invalid_shape_raises(visitor, mocker):
-    task = mocker.Mock(spec=Task)
-    task.id = "task_1"
-    task.behavior = Feel(NumberLiteralNode("1"))
-    in_flow = make_flow(mocker, "ev_start", "task_1", "f_in")
-    out_flow = make_flow(mocker, "task_1", "gw_1", "f_out")
-    task.in_flows = [in_flow]
-    task.out_flows = [out_flow]
-
-    with pytest.raises(ErrorException) as excinfo:
-        visitor._transition_body(task, None, ["x"])
-
-    assert isinstance(excinfo.value.error, CbmcUnsupportedElementError)
+def test_boundary_event_is_an_error():
+    s, t, e = start(), Task("T", "T", ""), end()
+    seq(s, t)
+    seq(t, e)
+    boundary = Task.BoundaryEvent("BE", "BE", "", "", "T")
+    t.add_boundary_event(boundary)
+    visitor = generate(make_bpmn(("P", [s, t, e])))
+    assert isinstance(visitor.result().failure(), BpmnCbmcUnsupportedElementError)
 
 
-def test_transition_body_task_without_behavior_no_update_call(visitor, mocker):
-    task = mocker.Mock(spec=Task)
-    task.id = "task_1"
-    task.behavior = ""
-    in_flow = make_flow(mocker, "ev_start", "task_1", "f_in")
-    out_flow = make_flow(mocker, "task_1", "gw_1", "f_out")
-    task.in_flows = [in_flow]
-    task.out_flows = [out_flow]
-    lines = visitor._transition_body(task, None, [])
-    assert not any("update_cwp_state" in line for line in lines)
+def test_gateway_with_message_is_an_error():
+    s, g, e = start(), ExclusiveGatewayNode("G", "G"), end()
+    seq(s, g)
+    seq(g, e, "true")
+    o, oe = start("O"), end("OE")
+    seq(o, oe)
+    msg(o, g)
+    visitor = generate(make_bpmn(("P", [s, g, e]), ("Q", [o, oe])))
+    assert isinstance(visitor.result().failure(), BpmnCbmcUnsupportedElementError)
 
 
-def test_transition_body_xor_gateway(visitor, mocker):
-    gw = mocker.Mock(spec=ExclusiveGatewayNode)
-    gw.id = "gw_1"
-    in_flow = make_flow(mocker, "task_1", "gw_1", "f_in")
-    out_flow = make_flow(mocker, "gw_1", "task_2", "f_out")
-    gw.in_flows = [in_flow]
-    lines = visitor._transition_body(gw, out_flow, [])
-    assert any("p_gw_1_FROM_task_1 = false;" in line for line in lines)
-    assert any("p_task_2_FROM_gw_1 = true;" in line for line in lines)
+@pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc not installed")
+def test_generated_c_runs_in_cbmc(tmp_path):
+    s, g, a, b, e = (
+        start(),
+        ExclusiveGatewayNode("G", "G"),
+        Task("A", "A", ""),
+        Task("B", "B", ""),
+        end(),
+    )
+    seq(s, g)
+    seq(g, a, "x > 1")
+    seq(g, b, "x <= 1")
+    seq(a, e)
+    seq(b, e)
+    code = repr(generate(make_bpmn(("P", [s, g, a, b, e]))))
+    harness = (
+        "int x;\n"
+        f"{code}"
+        "int main(void) {\n"
+        "\tx = nondet_uint() % 4;\n"
+        "\tP_init();\n"
+        "\tfor (int i = 0; i < 4; i++) P_step();\n"
+        "\tassert(P_done);\n"
+        "\treturn 0;\n"
+        "}\n"
+    )
+    path = tmp_path / "model.c"
+    path.write_text(harness)
+    run = subprocess.run(
+        ["cbmc", str(path), "--unwind", "5"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert "VERIFICATION SUCCESSFUL" in run.stdout, run.stdout
 
 
-def test_transition_body_end_event(visitor, mocker):
-    event = mocker.Mock(spec=EndEvent)
-    event.id = "ev_end"
-    in_flow = make_flow(mocker, "gw_1", "ev_end", "f_in")
-    event.in_flows = [in_flow]
-    lines = visitor._transition_body(event, None, [])
-    assert any("p_ev_end_FROM_gw_1 = false;" in line for line in lines)
-    assert any("ev_end_reached = true;" in line for line in lines)
-    assert any("running = false;" in line for line in lines)
+def _feel(text: str):
+    return parse_expression(text).unwrap()
 
 
-def test_transition_body_parallel_gateway_fork(visitor, mocker):
-    gw = mocker.Mock(spec=ParallelGatewayNode)
-    gw.id = "gw_fork"
-    gw.is_fork = True
-    in_flow = make_flow(mocker, "task_1", "gw_fork", "f_in")
-    out_flow_a = make_flow(mocker, "gw_fork", "task_a", "f_out_a")
-    out_flow_b = make_flow(mocker, "gw_fork", "task_b", "f_out_b")
-    gw.in_flows = [in_flow]
-    gw.out_flows = [out_flow_a, out_flow_b]
-    lines = visitor._transition_body(gw, None, [])
-    assert any("p_gw_fork_FROM_task_1 = false;" in line for line in lines)
-    assert any("p_task_a_FROM_gw_fork = true;" in line for line in lines)
-    assert any("p_task_b_FROM_gw_fork = true;" in line for line in lines)
+def test_feel_behavior_and_conditions_are_translated():
+    s, g, t, e, e2 = (
+        start(),
+        ExclusiveGatewayNode("G", "G"),
+        Task("T", "T", ""),
+        end(),
+        end("E2"),
+    )
+    t.behavior = parse_behavior("(x, [x], x + 1), (y, [], choose [1, 2])").unwrap()
+    seq(s, t)
+    seq(t, g)
+    seq(g, e, "")
+    seq(g, e2, "")
+    g.out_flows[0].expression = _feel("x > 2 and choose [true, false]")
+    g.out_flows[1].expression = _feel("not (x > 2)")
+    visitor = generate(make_bpmn(("P", [s, t, g, e, e2])))
+    code = repr(visitor)
+    assert visitor.errors == []
+    assert "x = (x + 1);" in code
+    assert "void updateState(void);" in code
+    assert code.count("updateState();") == 1
+    assert "unsigned int T_feel_choose_0 = nondet_uint();" in code
+    assert "y = (T_feel_choose_0 == 0 ? 1 : 2);" in code
+    assert "unsigned int guard0_choose_0 = nondet_uint();" in code
+    assert "bool guard0 = (((x > 2) && (guard0_choose_0 == 0 ? true : false)));" in code
+    assert "bool guard1 = ((!(x > 2)));" in code
 
 
-def test_transition_body_parallel_gateway_join(visitor, mocker):
-    gw = mocker.Mock(spec=ParallelGatewayNode)
-    gw.id = "gw_join"
-    gw.is_fork = False
-    in_flow_a = make_flow(mocker, "task_a", "gw_join", "f_in_a")
-    in_flow_b = make_flow(mocker, "task_b", "gw_join", "f_in_b")
-    out_flow = make_flow(mocker, "gw_join", "task_2", "f_out")
-    gw.in_flows = [in_flow_a, in_flow_b]
-    gw.out_flows = [out_flow]
-    lines = visitor._transition_body(gw, None, [])
-    assert any("p_gw_join_FROM_task_a = false;" in line for line in lines)
-    assert any("p_gw_join_FROM_task_b = false;" in line for line in lines)
-    assert any("p_task_2_FROM_gw_join = true;" in line for line in lines)
+def test_feel_that_c_cannot_express_is_an_error():
+    s, t, e = start(), Task("T", "T", ""), end()
+    t.behavior = parse_behavior("(x, [x], x + 1.5)").unwrap()
+    seq(s, t)
+    seq(t, e)
+    visitor = generate(make_bpmn(("P", [s, t, e])))
+    assert isinstance(visitor.result().failure(), FeelCbmcUnsupportedError)
 
 
-def test_transition_body_intermediate_event(visitor, mocker):
-    event = mocker.Mock(spec=IntermediateEvent)
-    event.id = "ev_int"
-    in_flow = make_flow(mocker, "task_1", "ev_int", "f_in")
-    out_flow = make_flow(mocker, "ev_int", "task_2", "f_out")
-    event.in_flows = [in_flow]
-    event.out_flows = [out_flow]
-    lines = visitor._transition_body(event, None, [])
-    assert any("p_ev_int_FROM_task_1 = false;" in line for line in lines)
-    assert any("p_task_2_FROM_ev_int = true;" in line for line in lines)
-    assert not any("update_cwp_state" in line for line in lines)
-    assert not any("running = false;" in line for line in lines)
+@pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc not installed")
+def test_feel_behavior_with_choose_in_cbmc(tmp_path):
+    s, t, e = start(), Task("T", "T", ""), end()
+    t.behavior = parse_behavior("(x, [], choose [1, 2, 3])").unwrap()
+    seq(s, t)
+    seq(t, e)
+    code = repr(generate(make_bpmn(("P", [s, t, e]))))
 
-
-# ── behavior translation ──────────────────────────────────────────────────────
-
-
-class TestTranslateBehavior:
-    """Unit tests for BpmnCbmcVisitor._translate_behavior (static method)."""
-
-    # ── empty / whitespace ────────────────────────────────────────────────────
-
-    def test_empty_string_returns_empty(self):
-        assert BpmnCbmcVisitor._translate_behavior("") == []
-
-    def test_whitespace_only_returns_empty(self):
-        assert BpmnCbmcVisitor._translate_behavior("   \n  ") == []
-
-    # ── plain C passthrough ───────────────────────────────────────────────────
-
-    def test_single_plain_assignment_gets_semicolon(self):
-        result = BpmnCbmcVisitor._translate_behavior("backpackOwner = sellerName")
-        assert result == ["backpackOwner = sellerName;"]
-
-    def test_plain_assignment_with_existing_semicolon_not_doubled(self):
-        result = BpmnCbmcVisitor._translate_behavior("backpackOwner = sellerName;")
-        assert result == ["backpackOwner = sellerName;"]
-
-    def test_multiline_plain_assignments(self):
-        behavior = "backpackOwner = sellerName\npaymentOwner = buyerName"
-        result = BpmnCbmcVisitor._translate_behavior(behavior)
-        assert result == [
-            "backpackOwner = sellerName;",
-            "paymentOwner = buyerName;",
-        ]
-
-    # ── Promela if/fi → nondet/assume ────────────────────────────────────────
-
-    def test_iffi_two_values(self):
-        behavior = "if\n:: true -> terms = agreed\n:: true -> terms = failed\nfi"
-        result = BpmnCbmcVisitor._translate_behavior(behavior)
-        assert result == [
-            "int t = nondet_int();",
-            "__CPROVER_assume(t == agreed || t == failed);",
-            "terms = t;",
-        ]
-
-    def test_iffi_three_values(self):
-        behavior = (
-            "if\n"
-            ":: true -> paymentOffered = paymentAmount\n"
-            ":: true -> paymentOffered = belowPaymentAmount\n"
-            ":: true -> paymentOffered = noRetryPayment\n"
-            "fi"
+    def run(check: str):
+        path = tmp_path / "model.c"
+        path.write_text(
+            f"int x = 0;\nvoid updateState(void) {{}}\n{code}int main(void) {{\n\tP_init();\n"
+            f"\tfor (int i = 0; i < 4; i++) P_step();\n\t{check}\n\treturn 0;\n}}\n"
         )
-        result = BpmnCbmcVisitor._translate_behavior(behavior)
-        assert result == [
-            "int t = nondet_int();",
-            "__CPROVER_assume(t == paymentAmount || t == belowPaymentAmount || t == noRetryPayment);",
-            "paymentOffered = t;",
-        ]
+        return subprocess.run(
+            ["cbmc", str(path), "--unwind", "5"],
+            check=False,
+            capture_output=True,
+            text=True,
+        ).stdout
 
-    def test_iffi_with_leading_trailing_whitespace(self):
-        # The visitor strips behavior before processing.
-        behavior = "\nif\n:: true -> x = a\n:: true -> x = b\nfi\n"
-        result = BpmnCbmcVisitor._translate_behavior(behavior)
-        assert result == [
-            "int t = nondet_int();",
-            "__CPROVER_assume(t == a || t == b);",
-            "x = t;",
-        ]
-
-    def test_two_iffi_blocks_use_indexed_temp_vars(self):
-        # Two separate if/fi blocks in one task (unusual but must not redeclare 't').
-        behavior = (
-            "if\n:: true -> a = x\n:: true -> a = y\nfi\n"
-            "if\n:: true -> b = p\n:: true -> b = q\nfi"
-        )
-        result = BpmnCbmcVisitor._translate_behavior(behavior)
-        assert result == [
-            "int t = nondet_int();",
-            "__CPROVER_assume(t == x || t == y);",
-            "a = t;",
-            "int t1 = nondet_int();",
-            "__CPROVER_assume(t1 == p || t1 == q);",
-            "b = t1;",
-        ]
-
-    def test_three_iffi_blocks_use_sequential_index(self):
-        block = "if\n:: true -> v = a\n:: true -> v = b\nfi\n"
-        behavior = block * 3
-        result = BpmnCbmcVisitor._translate_behavior(behavior)
-        # First block: t, second: t1, third: t2
-        assert result[0] == "int t = nondet_int();"
-        assert result[3] == "int t1 = nondet_int();"
-        assert result[6] == "int t2 = nondet_int();"
-
-    # ── conditional branches (Case A) ─────────────────────────────────────────
-
-    def test_conditional_branch_same_var(self):
-        # All branches assign same variable; conditional guards go into assume.
-        # Guards are wrapped in one extra () layer by the translator.
-        behavior = (
-            "if\n"
-            ":: true -> sevNeed = homeCare\n"
-            ":: (a || b) -> sevNeed = outsideHomeCare\n"
-            ":: (c && d) -> sevNeed = discharge\n"
-            "fi"
-        )
-        result = BpmnCbmcVisitor._translate_behavior(behavior)
-        assert result == [
-            "int t = nondet_int();",
-            "__CPROVER_assume(t == homeCare || (t == outsideHomeCare && ((a || b))) || (t == discharge && ((c && d))));",
-            "sevNeed = t;",
-        ]
-
-    # ── no-op branches (Case B) ───────────────────────────────────────────────
-
-    def test_noop_branch_unconditional(self):
-        # One conditional assignment + one always-enabled no-op (:: true).
-        behavior = "if\n:: cond -> x = val\n:: true\nfi"
-        result = BpmnCbmcVisitor._translate_behavior(behavior)
-        assert result == [
-            "int t = nondet_int();",
-            "__CPROVER_assume((t == 0 && (cond)) || t == 1);",
-            "if (t == 0) { x = val; }",
-        ]
-
-    def test_noop_branch_else_treated_as_unconditional(self):
-        # Promela 'else' keyword normalized to always-enabled.
-        behavior = "if\n:: cond -> x = val\n:: else\nfi"
-        result = BpmnCbmcVisitor._translate_behavior(behavior)
-        assert result == [
-            "int t = nondet_int();",
-            "__CPROVER_assume((t == 0 && (cond)) || t == 1);",
-            "if (t == 0) { x = val; }",
-        ]
-
-    def test_noop_branch_with_condition(self):
-        # No-op branch with a guard condition (conditionally skip).
-        behavior = "if\n:: g1 -> x = a\n:: g2\nfi"
-        result = BpmnCbmcVisitor._translate_behavior(behavior)
-        assert result == [
-            "int t = nondet_int();",
-            "__CPROVER_assume((t == 0 && (g1)) || (t == 1 && (g2)));",
-            "if (t == 0) { x = a; }",
-        ]
-
-    # ── multi-line branch joining ──────────────────────────────────────────────
-
-    def test_join_continuation_lines_joins_arrow_with_next(self):
-        lines = [":: cond ->", "    x = val", ":: true"]
-        result = BpmnCbmcVisitor._join_continuation_lines(lines)
-        assert result == [":: cond -> x = val", ":: true"]
-
-    def test_join_continuation_lines_does_not_join_nested_if(self):
-        lines = [":: else ->", "    if", "    fi"]
-        result = BpmnCbmcVisitor._join_continuation_lines(lines)
-        # 'if' is a keyword — don't join; leave :: else -> as-is
-        assert result[0] == ":: else ->"
-
-    def test_multiline_branch_translated(self):
-        # Promela with guard and statement on separate lines (Activity_0pl73xy style).
-        behavior = "if\n:: cond ->\n    x = val\n:: true\nfi"
-        result = BpmnCbmcVisitor._translate_behavior(behavior)
-        assert result == [
-            "int t = nondet_int();",
-            "__CPROVER_assume((t == 0 && (cond)) || t == 1);",
-            "if (t == 0) { x = val; }",
-        ]
+    assert "VERIFICATION SUCCESSFUL" in run("assert(x >= 1 && x <= 3);")
+    for value in (1, 2, 3):
+        assert "VERIFICATION FAILED" in run(f"assert(x != {value});")
 
 
-# ── code generation ───────────────────────────────────────────────────────────
+@pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc not installed")
+def test_feel_workflow_verifies_in_cbmc(tmp_path):
+    state_text = (Path(FEEL) / "state.txt").read_text()
+    state = State.from_str(state_text).unwrap()
+    cwp_xml = unsafe_perform_io(
+        element_tree_from_string((Path(FEEL) / "test_cwp.xml").read_text()).unwrap()
+    )
+    bpmn_xml = unsafe_perform_io(
+        element_tree_from_string((Path(FEEL) / "test_bpmn.bpmn").read_text()).unwrap()
+    )
+    builder = (
+        CbmcBuilder()
+        .with_state(state)
+        .with_cwp(CwpXmlParser.from_xml(cwp_xml, state).unwrap())
+        .with_bpmn(bpmnmethods.from_xml(bpmn_xml, state).unwrap())
+    )
+    code = builder.build().unwrap()
+    bound = builder.unwind_bound().unwrap()
 
-
-def test_generate_transition_defines(visitor, mocker):
-    task = mocker.Mock(spec=Task)
-    task.id = "task_A"
-    end = mocker.Mock(spec=EndEvent)
-    end.id = "ev_end"
-    visitor._transitions = [(task, None), (end, None)]
-    output = visitor.generate_transition_defines()
-    assert "#define T_task_A" in output
-    assert "#define T_ev_end" in output
-
-
-def test_num_transitions(visitor, mocker):
-    task = mocker.Mock(spec=Task)
-    task.id = "task_1"
-    visitor.visit_task(task)
-    assert visitor.num_transitions == 1
+    # The CWP's start state is only made active by calculateState(), which the
+    # builder's main does not call; call it first, as the Promela init does.
+    code = code.replace("_init();", "_init(); calculateState();", 1)
+    path = tmp_path / "model.c"
+    path.write_text(code)
+    run = subprocess.run(
+        ["cbmc", str(path), "--unwind", str(bound), "--unwinding-assertions"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert "VERIFICATION SUCCESSFUL" in run.stdout, run.stdout

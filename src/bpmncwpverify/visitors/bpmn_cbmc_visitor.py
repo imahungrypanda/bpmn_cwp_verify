@@ -1,550 +1,501 @@
-"""
-bpmn_cbmc_visitor.py — BPMN traversal for CBMC C generation.
-
-Collects BPMN place and transition data via DFS, then emits:
-  1. Transition #define constants
-  2. int main() — token places, enable conditions, __CPROVER_assume,
-     if/else if dispatch, reachability block
-
-Bare-bones scope (v1): handles plain start events, tasks, XOR gateways
-(one T_ per outgoing flow), and end events.  Parallel gateways and
-intermediate events set self.error and halt further traversal.
-
-Place naming:
-  - Start event's own token:   p_<event.id>              (initialized true)
-  - Sequence-flow edge place:  p_<target.id>_FROM_<source.id>  (initialized false)
-
-Transition naming:
-  - Start/task/end node:       T_<node.id>
-  - XOR gateway outgoing flow: T_<flow.id>
-"""
-
-import re
+from returns.result import Failure, Result, Success
 
 from bpmncwpverify.core.bpmn import (
+    Bpmn,
     BpmnVisitor,
     EndEvent,
     ExclusiveGatewayNode,
+    Flow,
     IntermediateEvent,
+    MessageFlow,
     Node,
     ParallelGatewayNode,
-    SequenceFlow,
+    Process,
     StartEvent,
     Task,
 )
-from bpmncwpverify.core.error import Error
-from bpmncwpverify.core.feel import Feel
+from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedElementError,
+    BpmnSeqFlowNoExprError,
+    Error,
+)
+from bpmncwpverify.core.feel_tree import Behavior, Triple
+from bpmncwpverify.util.stringmanager import IndentAction, StringManager
 from bpmncwpverify.visitors.feel_to_cbmc_visitor import (
-    translate_feel_behavior,
-    translate_feel_expr,
+    behavior_to_c,
+    condition_to_c,
 )
 
+##############
+# Constants
+##############
+HELPER_FUNCS_STR = """#include <assert.h>
+#include <stdbool.h>
 
-class BpmnCbmcVisitor(BpmnVisitor):
+unsigned int nondet_uint(void);
+
+#define hasToken(place) ((place) != 0)
+#define putToken(place) do { assert((place) == 0 && "Attempting to place token in already-occupied place"); (place) = 1; } while (0)
+#define consumeToken(place) ((place) = 0)
+"""
+NL_NONE = 0
+NL_SINGLE = 1
+NL_DOUBLE = 2
+UNSUPPORTED_BEHAVIOR_KEYWORDS = {
+    "atomic",
+    "break",
+    "d_step",
+    "do",
+    "goto",
+    "od",
+    "printf",
+    "run",
+}
+UPDATE_STATE_DECL = "void updateState(void);"
+
+
+class _BehaviorError(Exception):
+    pass
+
+
+class _BehaviorTranslator:
+    """
+    Translates a task behavior (Promela-style statements: assignments,
+    `assert(...)`, `updateState()`, `skip` and `if :: guard -> ... fi`) into
+    lines of C. Like Promela, an `if` with no true guard blocks, which is
+    modeled with `__CPROVER_assume`; among several true guards one is picked
+    nondeterministically.
+    """
+
+    def __init__(self) -> None:
+        self._items: list[tuple[str, str, list[str]]] = []
+        self._pos = 0
+        self._counter = 0
+        self.uses_update_state = False
+
+    @staticmethod
+    def _statements(text: str) -> list[str]:
+        return [part.strip() for part in text.split(";") if part.strip()]
+
+    def _tokenize(self, behavior: str) -> None:
+        for raw in behavior.split("\n"):
+            line = raw.split("//")[0].strip()
+            if not line:
+                continue
+            if line.startswith("::"):
+                guard, arrow, rest = line[2:].partition("->")
+                if not arrow:
+                    guard, rest = guard, ""
+                self._items.append(
+                    ("opt", " ".join(guard.split()), self._statements(rest))
+                )
+            elif line in ("if", "fi"):
+                self._items.append((line, "", []))
+            else:
+                for stmt in self._statements(line):
+                    self._items.append(("stmt", stmt, []))
+
+    def translate(self, behavior: str) -> list[str]:
+        self._tokenize(behavior)
+        lines = self._block()
+        if self._pos != len(self._items):
+            raise _BehaviorError("unbalanced 'if'/'fi' in behavior")
+        return lines
+
+    def _statement(self, stmt: str) -> list[str]:
+        word = stmt.split("(")[0].split()[0] if stmt.split() else ""
+        if word in UNSUPPORTED_BEHAVIOR_KEYWORDS or stmt.endswith(":"):
+            raise _BehaviorError(f"behavior statement '{stmt}' is not supported")
+        if stmt == "skip":
+            return []
+        if stmt.replace(" ", "") == "updateState()":
+            self.uses_update_state = True
+            return ["updateState();"]
+        return [f"{' '.join(stmt.split())};"]
+
+    def _block(self) -> list[str]:
+        lines: list[str] = []
+        while self._pos < len(self._items):
+            kind, text, _ = self._items[self._pos]
+            if kind in ("fi", "opt"):
+                break
+            self._pos += 1
+            if kind == "if":
+                lines += self._if()
+            else:
+                lines += self._statement(text)
+        return lines
+
+    def _if(self) -> list[str]:
+        options: list[tuple[str, list[str]]] = []
+        while self._pos < len(self._items) and self._items[self._pos][0] == "opt":
+            _, guard, stmts = self._items[self._pos]
+            self._pos += 1
+            body = [line for stmt in stmts for line in self._statement(stmt)]
+            body += self._block()
+            options.append((guard, body))
+        if self._pos >= len(self._items) or self._items[self._pos][0] != "fi":
+            raise _BehaviorError("'if' in behavior is not closed by 'fi'")
+        self._pos += 1
+        if not options:
+            raise _BehaviorError("'if' in behavior has no options")
+
+        n = self._counter
+        self._counter += 1
+        regular = [g for g, _ in options if g != "else"]
+        guards: list[str] = []
+        for guard, _ in options:
+            if guard == "else":
+                others = " || ".join(f"({g})" for g in regular) or "false"
+                guards.append(f"!({others})")
+            else:
+                guards.append(guard)
+
+        lines = ["{"]
+        for i, guard in enumerate(guards):
+            lines.append(f"bool if{n}_guard{i} = ({guard});")
+        lines.append(f"unsigned int if{n}_pick = nondet_uint();")
+        picked = " || ".join(
+            f"(if{n}_pick == {i} && if{n}_guard{i})" for i in range(len(options))
+        )
+        lines.append(f"__CPROVER_assume({picked});")
+        for i, (_, body) in enumerate(options):
+            lines.append(f"if (if{n}_pick == {i}) {{")
+            lines += body
+            lines.append("}")
+        lines.append("}")
+        return lines
+
+
+##############
+
+
+class CbmcBpmnGenVisitor(BpmnVisitor):
+    """
+    Generates C that models the execution of a BPMN.
+
+    Every sequence flow and message flow gets a token place, a global named
+    `<target>_FROM_<source>` (a start event with no incoming flows uses its own
+    id). Every element gets a `static bool <id>_step(void)` that, if the element
+    is enabled, fires it and returns true. Every process gets
+    `bool <process>_step(void)`, which fires one enabled element, chosen
+    nondeterministically, and returns whether anything fired, and
+    `void <process>_init(void)`, which places the initial tokens.
+    `<process>_done` is set once the process's end event fires.
+
+    Elements that cannot be expressed are recorded in `errors`. Use `result()`
+    to get either the C or the first error.
+    """
+
     __slots__ = [
-        "_transitions",  # list[tuple[Node, SequenceFlow | None]]
-        "_places",  # dict[str, bool] — place_name → initial bool value
-        "_end_event_ids",  # list[str] — end event node IDs, for reachability block
-        "_visited_ids",  # set[str] — DFS pruning
-        "error",  # Error | None
+        "_process_elements",
+        "_process_id",
+        "_process_init_places",
+        "_update_state_declared",
+        "_visited",
+        "behaviors",
+        "defs",
+        "elements",
+        "errors",
+        "inits",
+        "process_ids",
+        "processes",
+        "var_defs",
     ]
 
     def __init__(self) -> None:
-        self._transitions: list[tuple[Node, SequenceFlow | None]] = []
-        self._places: dict[str, bool] = {}
-        self._end_event_ids: list[str] = []
-        self._visited_ids: set[str] = set()
-        self.error: Error | None = None
+        self.defs = StringManager()
+        self.var_defs = StringManager()
+        self.behaviors = StringManager()
+        self.elements = StringManager()
+        self.processes = StringManager()
+        self.inits = StringManager()
+        self.errors: list[Error] = []
+        self.process_ids: list[str] = []
+        self._visited: set[str] = set()
+        self._process_id = ""
+        self._process_elements: list[str] = []
+        self._process_init_places: list[str] = []
+        self._update_state_declared = False
 
-    # ── name helpers ─────────────────────────────────────────────────────────
+    def result(self) -> Result[str, Error]:
+        if self.errors:
+            return Failure(self.errors[0])
+        return Success(repr(self))
 
-    @staticmethod
-    def _flow_place_name(flow: SequenceFlow) -> str:
-        """p_<target.id>_FROM_<source.id>"""
-        return f"p_{flow.target_node.id}_FROM_{flow.source_node.id}"
+    def __repr__(self) -> str:
+        return f"{self.defs}{self.var_defs}{self.behaviors}{self.elements}{self.processes}{self.inits}"
 
-    @staticmethod
-    def _start_place_name(event: StartEvent) -> str:
-        return f"p_{event.id}"
-
-    @staticmethod
-    def _transition_define_name(node: Node, flow: "SequenceFlow | None") -> str:
-        if flow is not None:
-            return f"T_{flow.id}"
-        return f"T_{node.id}"
-
-    @staticmethod
-    def _enable_var_name(node: Node, flow: "SequenceFlow | None") -> str:
-        if flow is not None:
-            return f"en_{flow.id}"
-        return f"en_{node.id}"
-
-    # ── enable-expression helpers ─────────────────────────────────────────────
-
-    def _in_place_names(self, node: Node) -> list[str]:
-        """Place names for all incoming flow edges of a non-start node."""
-        return [f"p_{node.id}_FROM_{f.source_node.id}" for f in node.in_flows]
-
-    def _or_of_in_places(self, node: Node) -> str:
-        places = self._in_place_names(node)
-        if len(places) == 1:
-            return places[0]
-        return " || ".join(places)
-
-    def _and_of_in_places(self, node: Node) -> str:
-        places = self._in_place_names(node)
-        if len(places) == 1:
-            return places[0]
-        return " && ".join(places)
-
-    def _enable_expr(self, node: Node, flow: "SequenceFlow | None") -> str:
-        """C boolean expression: true when this transition may fire."""
-        if isinstance(node, StartEvent):
-            return self._start_place_name(node)
-        if isinstance(node, ExclusiveGatewayNode):
-            assert flow is not None
-            gw_in = self._or_of_in_places(node)
-            if flow.expression:
-                expr_text = translate_feel_expr(flow.expression, flow.id)
-                return f"({gw_in}) && ({expr_text})"
-            return f"({gw_in})"
-        if isinstance(node, ParallelGatewayNode):
-            # Fork: OR (usually one in_place). Join: AND (all branches must complete).
-            if node.is_fork:
-                return self._or_of_in_places(node)
-            return self._and_of_in_places(node)
-        return self._or_of_in_places(node)
-
-    # Matches: :: GUARD -> VAR = VALUE  (any guard, single line)
-    _ASSIGN_BRANCH_RE = re.compile(r"::\s*(.+?)\s*->\s*(\w+)\s*=\s*(\S+)\s*$")
+    ####################
+    # Helpers
+    ####################
 
     @staticmethod
-    def _join_continuation_lines(lines: list[str]) -> list[str]:
-        """Join ':: GUARD ->' lines with the statement on the following line.
+    def _place(element: Node, flow: Flow | None = None) -> str:
+        if flow:
+            return f"{element.id}_FROM_{flow.source_node.id}"
+        return element.id
 
-        Promela allows a branch guard and its statement on separate lines:
-            :: trndSevNeed == outsideHomeCare ->
-                sevNeed = expired
-        This pass merges them into one line so _translate_behavior can parse them
-        with a single regex. Lines that continue to a nested 'if' or another '::'
-        are left as-is (can't be expressed as a single VAR = VALUE assignment).
+    def _in_places(self, element: Node) -> tuple[list[str], list[str]]:
         """
-        result: list[str] = []
-        i = 0
-        while i < len(lines):
-            stripped = lines[i].strip()
-            if stripped.startswith("::") and stripped.endswith("->"):
-                # Skip blank lines then look at the next non-empty line.
-                i += 1
-                while i < len(lines) and not lines[i].strip():
-                    i += 1
-                if i < len(lines):
-                    next_s = lines[i].strip()
-                    # Only join if the continuation is a plain statement, not
-                    # another branch delimiter or a nested if/fi keyword.
-                    if not next_s.startswith("::") and next_s not in ("if", "fi"):
-                        stripped = stripped + " " + next_s
-                        i += 1
-            else:
-                i += 1
-            result.append(stripped)
-        return result
-
-    @staticmethod
-    def _translate_behavior_impl(behavior: str) -> tuple[list[str], bool]:
-        """Internal implementation of behavior translation.
-
-        Returns (lines, always_assigns) where always_assigns is True if every
-        execution path through the behavior is guaranteed to assign to at least
-        one state variable (i.e., the behavior contains at least one plain
-        statement or a Case-A if/fi block — no Case-B no-op-branch-only blocks).
-
-        Handles three forms of Promela if/fi branches:
-          :: true -> VAR = VALUE          (unconditional assignment)
-          :: COND -> VAR = VALUE          (conditional assignment)
-          :: COND  or  :: true            (no-op / skip branch)
-
-        Case A — all branches assign the same variable, no no-ops (always_assigns):
-            int t = nondet_int();
-            __CPROVER_assume(t == A || (t == B && (COND)));
-            var = t;
-
-        Case B — mixed branches (no-op or multiple variables, NOT always_assigns
-                  unless mixed with plain statements or Case-A blocks elsewhere):
-            int t = nondet_int();
-            __CPROVER_assume(t == 0 || (t == 1 && (COND)) || t == 2);
-            if (t == 0) { var = A; }
-            else if (t == 1) { var = B; }
-            // t == 2: no-op branch
-
-        Plain statements are passed through with a semicolon added if missing.
-        Stray 'fi' tokens from nested blocks are silently skipped.
-        Empty behavior returns ([], False).
+        Returns (in-process places, message places) for the element.
         """
-        behavior = behavior.strip()
-        if not behavior:
-            return [], False
+        if not (element.in_flows or element.in_msgs):
+            return [self._place(element)], []
+        return (
+            [self._place(element, flow) for flow in element.in_flows],
+            [self._place(element, msg) for msg in element.in_msgs],
+        )
 
-        result: list[str] = []
-        # Counter for temp-var naming: t, t1, t2, ... (one per if/fi block).
-        iffi_idx = 0
-        # True once we see any guaranteed-executing assignment.
-        always_assigns = False
+    def _out_places(self, element: Node) -> list[str]:
+        return [
+            self._place(flow.target_node, flow)
+            for flow in element.out_flows + element.out_msgs
+        ]
 
-        raw_lines = BpmnCbmcVisitor._join_continuation_lines(behavior.splitlines())
-        i = 0
-        while i < len(raw_lines):
-            line = raw_lines[i].strip()
+    def _guard(self, element: Node) -> str:
+        seq, msgs = self._in_places(element)
+        parts: list[str] = []
+        if element.in_flows or not element.in_msgs:
+            parts.append(" || ".join(f"hasToken({p})" for p in seq))
+            parts[0] = f"({parts[0]})"
+        if msgs:
+            parts.append("(" + " && ".join(f"hasToken({p})" for p in msgs) + ")")
+        return " && ".join(parts)
 
-            if line == "if":
-                # Collect branches until the first 'fi'.
-                # Each branch is (guard, var, val) where var/val are None for no-ops.
-                branches: list[tuple[str, str | None, str | None]] = []
-                i += 1
-                while i < len(raw_lines) and raw_lines[i].strip() != "fi":
-                    bline = raw_lines[i].strip()
-                    m = BpmnCbmcVisitor._ASSIGN_BRANCH_RE.match(bline)
-                    if m:
-                        guard, var, val = m.group(1).strip(), m.group(2), m.group(3)
-                        branches.append((guard, var, val))
-                    elif bline.startswith("::"):
-                        # No-op branch: :: GUARD (no assignment after ->).
-                        guard_part = bline[2:].strip()
-                        if guard_part.endswith("->"):
-                            guard_part = guard_part[:-2].strip()
-                        # Promela 'else' is not valid C; treat as always-enabled.
-                        guard = "true" if guard_part in ("else", "") else guard_part
-                        branches.append((guard, None, None))
-                    i += 1
-                i += 1  # skip 'fi'
+    def _unsupported(self, element: Node, reason: str) -> None:
+        self.errors.append(BpmnCbmcUnsupportedElementError(element.id, reason))
 
-                if not branches:
-                    continue
+    def _first_visit(self, element: Node) -> bool:
+        if element.id in self._visited:
+            return False
+        self._visited.add(element.id)
+        return True
 
-                assign_branches = [
-                    (g, v, val) for g, v, val in branches if v is not None
-                ]
-                noop_guards = [g for g, v, _ in branches if v is None]
-                vars_used = list(dict.fromkeys(v for _, v, _ in assign_branches))
+    def _declare_places(self, element: Node) -> None:
+        seq, msgs = self._in_places(element)
+        for place in seq + msgs:
+            self.var_defs.write_str(f"static unsigned char {place} = 0;", NL_SINGLE)
 
-                t_var = "t" if iffi_idx == 0 else f"t{iffi_idx}"
-                iffi_idx += 1
-
-                if assign_branches and len(vars_used) == 1 and not noop_guards:
-                    # Case A: all same variable, no no-ops → always assigns.
-                    always_assigns = True
-                    var = vars_used[0]
-                    assume_parts: list[str] = []
-                    for guard, _, val in assign_branches:
-                        if guard == "true":
-                            assume_parts.append(f"{t_var} == {val}")
-                        else:
-                            assume_parts.append(f"({t_var} == {val} && ({guard}))")
-                    result.append(f"int {t_var} = nondet_int();")
-                    result.append(f"__CPROVER_assume({' || '.join(assume_parts)});")
-                    result.append(f"{var} = {t_var};")
-
-                elif assign_branches:
-                    # Case B: mixed or multi-variable → per-branch index.
-                    # Does NOT set always_assigns (no-op path may execute).
-                    assume_parts = []
-                    for idx, (guard, _, _) in enumerate(assign_branches):
-                        if guard == "true":
-                            assume_parts.append(f"{t_var} == {idx}")
-                        else:
-                            assume_parts.append(f"({t_var} == {idx} && ({guard}))")
-                    for j, guard in enumerate(noop_guards):
-                        noop_idx = len(assign_branches) + j
-                        if guard == "true":
-                            assume_parts.append(f"{t_var} == {noop_idx}")
-                        else:
-                            assume_parts.append(f"({t_var} == {noop_idx} && ({guard}))")
-                    result.append(f"int {t_var} = nondet_int();")
-                    result.append(f"__CPROVER_assume({' || '.join(assume_parts)});")
-                    for idx, (_, var, val) in enumerate(assign_branches):
-                        kw = "if" if idx == 0 else "else if"
-                        result.append(f"{kw} ({t_var} == {idx}) {{ {var} = {val}; }}")
-                # else: only no-op branches — nothing to emit.
-
-            elif line == "fi":
-                # Stray 'fi' from a nested if/fi whose inner 'fi' already closed
-                # the translator's scan loop — skip it silently.
-                i += 1
-
-            elif line:
-                # Plain statement — always executes → guarantees an assignment.
-                always_assigns = True
-                stmt = line if line.endswith(";") else line + ";"
-                result.append(stmt)
-                i += 1
-
-            else:
-                i += 1
-
-        return result, always_assigns
-
-    @staticmethod
-    def _translate_behavior(behavior: str) -> list[str]:
-        """Public API: translate behavior to C lines.
-
-        Thin wrapper around _translate_behavior_impl; discards the always_assigns
-        flag so callers that don't need it (e.g., tests) get a plain list[str].
-        Use _translate_behavior_impl directly when the flag is needed.
+    def _write_step(
+        self,
+        element: Node,
+        body: list[str],
+        guard: str | None = None,
+    ) -> None:
         """
-        lines, _ = BpmnCbmcVisitor._translate_behavior_impl(behavior)
+        Writes `static bool <id>_step(void)`. `body` holds the statements that
+        run once the element fires, after its tokens are consumed.
+        """
+        sm = self.elements
+        sm.write_str(
+            f"static bool {element.id}_step(void) {{", NL_SINGLE, IndentAction.INC
+        )
+        sm.write_str(
+            f"if (!({guard if guard is not None else self._guard(element)})) return false;",
+            NL_SINGLE,
+        )
+        for line in body:
+            sm.write_str(line, NL_SINGLE)
+        sm.write_str("return true;", NL_SINGLE)
+        sm.write_str("}", NL_DOUBLE, IndentAction.DEC)
+        self._process_elements.append(element.id)
+
+    def _consume_and_put(self, element: Node) -> list[str]:
+        lines: list[str] = []
+        seq, msgs = self._in_places(element)
+        for place in seq + msgs:
+            lines.append(f"consumeToken({place});")
+        for place in self._out_places(element):
+            lines.append(f"putToken({place});")
         return lines
 
+    def _simple_element(self, element: Node, extra: str = "") -> None:
+        self._declare_places(element)
+        body = [extra] if extra else []
+        body += self._consume_and_put(element)
+        self._write_step(element, body)
+
+    ####################
+    # Visitor Methods
+    ####################
+
     def visit_start_event(self, event: StartEvent) -> bool:
-        if event.id in self._visited_ids:
-            return False
-        self._visited_ids.add(event.id)
-        # Start event's own token place (initialized true)
-        self._places[self._start_place_name(event)] = True
-        self._transitions.append((event, None))
-        return True
-
-    def visit_task(self, task: Task) -> bool:
-        if task.id in self._visited_ids:
-            return False
-        self._visited_ids.add(task.id)
-        self._transitions.append((task, None))
-        return True
-
-    def visit_exclusive_gateway(self, gateway: ExclusiveGatewayNode) -> bool:
-        if gateway.id in self._visited_ids:
-            return False
-        self._visited_ids.add(gateway.id)
-        # One transition per outgoing flow
-        for flow in gateway.out_flows:
-            self._transitions.append((gateway, flow))
+        if not self._first_visit(event):
+            return True
+        self._simple_element(event)
+        if not (event.in_flows or event.in_msgs):
+            self._process_init_places.append(self._place(event))
         return True
 
     def visit_end_event(self, event: EndEvent) -> bool:
-        if event.id in self._visited_ids:
-            return False
-        self._visited_ids.add(event.id)
-        self._transitions.append((event, None))
-        self._end_event_ids.append(event.id)
-        return True
-
-    def visit_sequence_flow(self, flow: SequenceFlow) -> bool:
-        # Register the place for this edge (all flows, including back-edges)
-        place = self._flow_place_name(flow)
-        if place not in self._places:
-            self._places[place] = False
-        return True
-
-    def visit_parallel_gateway(self, gateway: ParallelGatewayNode) -> bool:
-        if gateway.id in self._visited_ids:
-            return False
-        self._visited_ids.add(gateway.id)
-        self._transitions.append((gateway, None))
+        if not self._first_visit(event):
+            return True
+        self._simple_element(event, extra=f"{self._process_id}_done = true;")
         return True
 
     def visit_intermediate_event(self, event: IntermediateEvent) -> bool:
-        if event.id in self._visited_ids:
-            return False
-        self._visited_ids.add(event.id)
-        self._transitions.append((event, None))
+        if not self._first_visit(event):
+            return True
+        self._simple_element(event)
         return True
 
-    # ── public properties ──────────────────────────────────────────────────────
-
-    @property
-    def num_transitions(self) -> int:
-        return len(self._transitions)
-
-    # ── code generation ────────────────────────────────────────────────────────
-
-    def generate_transition_defines(self) -> str:
-        """Emit: #define T_<name>  N  for each transition."""
-        lines = [
-            "/* ── Transition IDs ─────────────────────────────────────────────────────── */"
-        ]
-        for i, (node, flow) in enumerate(self._transitions):
-            name = self._transition_define_name(node, flow)
-            lines.append(f"#define {name:<36} {i}")
-        return "\n".join(lines) + "\n"
-
-    def generate_main(
-        self,
-        var_decls: list[str],
-        var_args: list[str],
-        cwp_num_states_define: str,
-        cwp_state_define_names: list[str],
-    ) -> str:
-        """
-        Emit the complete int main() function.
-
-        var_decls:             C declarations for the shared data variables,
-                               e.g. ["int x = 0;"].
-        var_args:              Call arguments for update_cwp_state(),
-                               e.g. ["x"].
-        cwp_num_states_define: #define name for the CWP state count,
-                               e.g. "CWP_NUM_STATES".
-        cwp_state_define_names: ordered list of CWP state #define names,
-                               e.g. ["CWP_INCREMENT_X", "CWP_END"].
-        """
-        lines: list[str] = []
-        lines.append("int main() {")
-        lines.append("")
-
-        # ── shared variable declarations ──
-        if var_decls:
-            for decl in var_decls:
-                lines.append(f"    {decl}")
-            lines.append("")
-
-        # ── token places ──
-        lines.append(
-            "    /* ── Token places — one bool per sequence-flow edge ────────────────── */"
+    def visit_task(self, task: Task) -> bool:
+        if not self._first_visit(task):
+            return True
+        if task.msg_boundary_events:
+            self._unsupported(task, "tasks with boundary events are not supported")
+            return True
+        translator = _BehaviorTranslator()
+        if isinstance(task.behavior, str):
+            try:
+                lines = translator.translate(task.behavior)
+            except _BehaviorError as e:
+                self._unsupported(task, str(e))
+                return True
+        elif not isinstance(task.behavior, Behavior | Triple):
+            self._unsupported(task, "a FEEL behavior must be made of triples")
+            return True
+        else:
+            feel_lines = behavior_to_c(task.behavior, f"{task.id}_feel")
+            if isinstance(feel_lines, Failure):
+                self.errors.append(feel_lines.failure())
+                return True
+            # A triple cannot call updateState(), so a FEEL behavior always
+            # ends with it, as in the Promela back end.
+            lines = [*feel_lines.unwrap(), "updateState();"]
+            translator.uses_update_state = True
+        if translator.uses_update_state and not self._update_state_declared:
+            self._update_state_declared = True
+            self.behaviors.write_str(UPDATE_STATE_DECL, NL_DOUBLE)
+        self.behaviors.write_str(
+            f"static void {task.id}_BehaviorModel(void) {{", NL_SINGLE, IndentAction.INC
         )
-        for place_name, initial in self._places.items():
-            val = "true" if initial else "false"
-            lines.append(f"    bool {place_name} = {val};")
-        lines.append("")
-
-        # ── end-event reachability vars ──
-        if self._end_event_ids:
-            lines.append("    /* Reachability tracking */")
-            for eid in self._end_event_ids:
-                lines.append(f"    bool {eid}_reached = false;")
-            lines.append("")
-
-        # ── CWP tracking ──
-        lines.append(
-            "    /* ── CWP state tracking ─────────────────────────────────────────────── */"
-        )
-        lines.append("    int cwp_state = 0;")
-        lines.append(f"    bool cwp_reached[{cwp_num_states_define}] = {{false}};")
-        # Compute initial CWP state from initial variable values.
-        # update_cwp_state transitions from state 0 (the CWP start_state) to
-        # whichever state the initial variable values map to, or stays in 0.
-        # P1 passes because 0→0 (self-loop) and 0→dest (start_state out_edge) are
-        # both valid CWP edges.
-        args = ", ".join(["&cwp_state", "cwp_reached"] + var_args)
-        lines.append(f"    update_cwp_state({args});")
-        lines.append("")
-
-        # ── scheduling loop ──
-        lines.append("    bool running = true;")
-        lines.append("    int step = 0;")
-        lines.append("    while (running && step < BOUND) {")
-        lines.append("")
-        lines.append("        int choice = nondet_int();")
-        lines.append("")
-
-        # enable conditions
-        lines.append(
-            "        /* ── Enable conditions ──────────────────────────────────────────── */"
-        )
-        for node, flow in self._transitions:
-            en_var = self._enable_var_name(node, flow)
-            en_expr = self._enable_expr(node, flow)
-            lines.append(f"        bool {en_var} = {en_expr};")
-        lines.append("")
-
-        # __CPROVER_assume
-        assume_parts = [
-            f"(choice == {self._transition_define_name(n, f)} && {self._enable_var_name(n, f)})"
-            for n, f in self._transitions
-        ]
-        assume_sep = " ||\n            "
-        lines.append("        __CPROVER_assume(")
-        lines.append(f"            {assume_sep.join(assume_parts)}")
-        lines.append("        );")
-        lines.append("")
-
-        # transition bodies
-        lines.append(
-            "        /* ── Transition bodies ──────────────────────────────────────────── */"
-        )
-        for idx, (node, flow) in enumerate(self._transitions):
-            t_name = self._transition_define_name(node, flow)
-            kw = "if" if idx == 0 else "} else if"
-            lines.append(f"        {kw} (choice == {t_name}) {{")
-            lines.extend(self._transition_body(node, flow, var_args))
-
-        if self._transitions:
-            lines.append("        }")
-        lines.append("")
-
-        lines.append("        step++;")
-        lines.append("    }")
-        lines.append("")
-
-        # reachability block
-        lines.append("    #ifdef REACHABILITY")
-        for eid in self._end_event_ids:
-            lines.append(f"        __CPROVER_cover({eid}_reached);")
-        for define_name in cwp_state_define_names:
-            lines.append(f"        __CPROVER_cover(cwp_reached[{define_name}]);")
-        lines.append("    #endif")
-        lines.append("")
-        lines.append("    return 0;")
-        lines.append("}")
-
-        return "\n".join(lines) + "\n"
-
-    def _transition_body(
-        self,
-        node: Node,
-        flow: "SequenceFlow | None",
-        var_args: list[str],
-    ) -> list[str]:
-        """Lines for the body of a single if/else-if branch (no braces)."""
-        lines: list[str] = []
-
-        if isinstance(node, StartEvent):
-            # Consume own place; produce downstream flow places.
-            lines.append(f"            {self._start_place_name(node)} = false;")
-            for f in node.out_flows:
-                lines.append(f"            {self._flow_place_name(f)} = true;")
-
-        elif isinstance(node, Task):
-            for f in node.in_flows:
-                lines.append(f"            {self._flow_place_name(f)} = false;")
-            if isinstance(node.behavior, Feel):
-                translated, always_assigns = translate_feel_behavior(
-                    node.behavior, node.id
-                )
+        for line in lines:
+            if line.startswith("}"):
+                self.behaviors.write_str(line, NL_SINGLE, IndentAction.DEC)
+            elif line.endswith("{"):
+                self.behaviors.write_str(line, NL_SINGLE, IndentAction.INC)
             else:
-                translated, always_assigns = self._translate_behavior_impl(
-                    node.behavior
+                self.behaviors.write_str(line, NL_SINGLE)
+        self.behaviors.write_str("}", NL_DOUBLE, IndentAction.DEC)
+        self._simple_element(task, extra=f"{task.id}_BehaviorModel();")
+        return True
+
+    def visit_boundary_event(self, boundary_event: Task.BoundaryEvent) -> bool:
+        self._unsupported(boundary_event, "boundary events are not supported")
+        return False
+
+    def visit_exclusive_gateway(self, gateway: ExclusiveGatewayNode) -> bool:
+        if not self._first_visit(gateway):
+            return True
+        if gateway.in_msgs or gateway.out_msgs:
+            self._unsupported(gateway, "gateways cannot have message flows")
+            return True
+        if not gateway.out_flows:
+            self._unsupported(gateway, "exclusive gateways need an outgoing flow")
+            return True
+        missing = [
+            f
+            for f in gateway.out_flows
+            if isinstance(f.expression, str) and not f.expression
+        ]
+        if missing:
+            for flow in missing:
+                self.errors.append(BpmnSeqFlowNoExprError(gateway.id, flow.id))
+            return True
+
+        self._declare_places(gateway)
+        body: list[str] = []
+        flows = gateway.out_flows
+        for i, flow in enumerate(flows):
+            if isinstance(flow.expression, str):
+                expr = " ".join(flow.expression.split())
+            else:
+                condition = condition_to_c(flow.expression, f"guard{i}")
+                if isinstance(condition, Failure):
+                    self.errors.append(condition.failure())
+                    return True
+                body += condition.unwrap().statements
+                expr = condition.unwrap().expr
+            body.append(f"bool guard{i} = ({expr});")
+        any_guard = " || ".join(f"guard{i}" for i in range(len(flows)))
+        body.append(f'assert(({any_guard}) && "No viable path to take");')
+        body.append("unsigned int pick = nondet_uint();")
+        picked = " || ".join(f"(pick == {i} && guard{i})" for i in range(len(flows)))
+        body.append(f"__CPROVER_assume({picked});")
+        seq, _ = self._in_places(gateway)
+        for place in seq:
+            body.append(f"consumeToken({place});")
+        for i, place in enumerate(self._out_places(gateway)):
+            body.append(f"if (pick == {i}) putToken({place});")
+        self._write_step(gateway, body)
+        return True
+
+    def visit_parallel_gateway(self, gateway: ParallelGatewayNode) -> bool:
+        if not self._first_visit(gateway):
+            return True
+        if gateway.in_msgs or gateway.out_msgs:
+            self._unsupported(gateway, "gateways cannot have message flows")
+            return True
+        if not gateway.out_flows:
+            self._unsupported(gateway, "parallel gateways need an outgoing flow")
+            return True
+
+        # A fork has one incoming flow and starts every outgoing branch; a join
+        # waits for a token on every incoming flow. Both are the same rule:
+        # consume from all incoming flows, put on all outgoing flows.
+        self._declare_places(gateway)
+        seq, _ = self._in_places(gateway)
+        guard = " && ".join(f"hasToken({p})" for p in seq)
+        self._write_step(gateway, self._consume_and_put(gateway), guard=f"({guard})")
+        return True
+
+    def visit_message_flow(self, flow: MessageFlow) -> bool:
+        # Message flows are modeled by the token places of the sending and
+        # receiving elements.
+        return True
+
+    def visit_process(self, process: Process) -> bool:
+        self._process_id = process.id
+        self._process_elements = []
+        self._process_init_places = []
+        self.process_ids.append(process.id)
+        self.var_defs.write_str(f"static bool {process.id}_done = false;", NL_SINGLE)
+        return True
+
+    def end_visit_process(self, process: Process) -> None:
+        pid = process.id
+        sm = self.processes
+        elements = self._process_elements
+
+        sm.write_str(f"bool {pid}_step(void) {{", NL_SINGLE, IndentAction.INC)
+        sm.write_str(f"if ({pid}_done) return false;", NL_SINGLE)
+        if elements:
+            n = len(elements)
+            sm.write_str(f"unsigned int start = nondet_uint() % {n}u;", NL_SINGLE)
+            sm.write_str(
+                f"for (unsigned int i = 0; i < {n}u; i++) {{",
+                NL_SINGLE,
+                IndentAction.INC,
+            )
+            sm.write_str(f"switch ((start + i) % {n}u) {{", NL_SINGLE)
+            for idx, element_id in enumerate(elements):
+                sm.write_str(
+                    f"case {idx}u: if ({element_id}_step()) return true; break;",
+                    NL_SINGLE,
                 )
-            for stmt in translated:
-                lines.append(f"            {stmt}")
-            for f in node.out_flows:
-                lines.append(f"            {self._flow_place_name(f)} = true;")
-            if always_assigns:
-                args = ", ".join(["&cwp_state", "cwp_reached"] + var_args)
-                lines.append(f"            update_cwp_state({args});")
+            sm.write_str("default: break;", NL_SINGLE)
+            sm.write_str("}", NL_SINGLE)
+            sm.write_str("}", NL_SINGLE, IndentAction.DEC)
+        sm.write_str("return false;", NL_SINGLE)
+        sm.write_str("}", NL_DOUBLE, IndentAction.DEC)
 
-        elif isinstance(node, ExclusiveGatewayNode):
-            assert flow is not None
-            # Consume all gateway incoming places (OR-merge: clear all).
-            for f in node.in_flows:
-                lines.append(f"            {self._flow_place_name(f)} = false;")
-            # Produce the selected outgoing place.
-            lines.append(f"            {self._flow_place_name(flow)} = true;")
+        self.inits.write_str(f"void {pid}_init(void) {{", NL_SINGLE, IndentAction.INC)
+        for place in self._process_init_places:
+            self.inits.write_str(f"putToken({place});", NL_SINGLE)
+        self.inits.write_str("}", NL_DOUBLE, IndentAction.DEC)
 
-        elif isinstance(node, IntermediateEvent):
-            for f in node.in_flows:
-                lines.append(f"            {self._flow_place_name(f)} = false;")
-            for f in node.out_flows:
-                lines.append(f"            {self._flow_place_name(f)} = true;")
-
-        elif isinstance(node, ParallelGatewayNode):
-            for f in node.in_flows:
-                lines.append(f"            {self._flow_place_name(f)} = false;")
-            for f in node.out_flows:
-                lines.append(f"            {self._flow_place_name(f)} = true;")
-
-        elif isinstance(node, EndEvent):
-            # Consume all incoming places.
-            for f in node.in_flows:
-                lines.append(f"            {self._flow_place_name(f)} = false;")
-            lines.append(f"            {node.id}_reached = true;")
-            lines.append("            running = false;")
-
-        return lines
+    def visit_bpmn(self, bpmn: Bpmn) -> bool:
+        self.defs.write_str(HELPER_FUNCS_STR, NL_DOUBLE)
+        return True

@@ -1,272 +1,228 @@
-# type: ignore
-"""
-Unit tests for CwpCbmcVisitor.
-
-Follows the same mock-heavy pattern used in test_cwp_promela_visitor.py —
-CwpState and CwpEdge objects are mocked rather than parsed from XML.
-"""
+import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
+from returns.result import Success
 
 from bpmncwpverify.core.cwp import Cwp, CwpEdge, CwpState
-from bpmncwpverify.core.feel import Feel
-from bpmncwpverify.visitors.cwp_cbmc_visitor import CwpCbmcVisitor
+from bpmncwpverify.core.error import FeelCbmcUnsupportedError
+from bpmncwpverify.core.feel import parse_expression
+from bpmncwpverify.visitors.cwp_cbmc_visitor import (
+    END_STR,
+    START_STR,
+    CwpCbmcVisitor,
+)
 
-# ── helpers ───────────────────────────────────────────────────────────────────
-
-
-def make_state(mocker, name: str, sid: str, in_edges=None, out_edges=None):
-    state = mocker.Mock(spec=CwpState)
-    state.id = sid
-    state.name = name
-    state.in_edges = in_edges or []
-    state.out_edges = out_edges or []
-    return state
+HEADER = "#include <stdbool.h>\n#include <assert.h>\n#include <stdlib.h>\n"
 
 
-def make_edge(mocker, eid: str, expression: "str | Feel", source=None, dest=None):
-    edge = mocker.Mock(spec=CwpEdge)
-    edge.id = eid
-    edge.expression = expression
-    edge.source = source
+def _link(cwp: Cwp, src: CwpState, dest: CwpState, expr: str) -> CwpEdge:
+    edge = CwpEdge(f"{src.name}_{dest.name}", f"{src.name}_{dest.name}")
+    edge.expression = expr
+    edge.source = src
     edge.dest = dest
+    src.out_edges.append(edge)
+    dest.in_edges.append(edge)
+    cwp.edges[edge.id] = edge
     return edge
 
 
-@pytest.fixture
-def visitor():
-    return CwpCbmcVisitor()
+def _build_cwp(branch: bool = False) -> Cwp:
+    """Start --x==1--> A --x==2--> End (and optionally A --x==3--> B)."""
+    cwp = Cwp()
+    names = ["Start", "A", "End"] + (["B"] if branch else [])
+    for n in names:
+        cwp.states[n] = CwpState(n, n)
+    s, a, e = cwp.states["Start"], cwp.states["A"], cwp.states["End"]
+    cwp.start_state = s
+    cwp.end_states = [e]
+    _link(cwp, s, a, "x == 1")
+    _link(cwp, a, e, "x == 2")
+    if branch:
+        _link(cwp, a, cwp.states["B"], "x == 3")
+    return cwp
 
 
-# ── name helpers ──────────────────────────────────────────────────────────────
+def _generate(cwp: Cwp) -> CwpCbmcVisitor:
+    visitor = CwpCbmcVisitor()
+    cwp.accept(visitor)
+    return visitor
 
 
-def test_define_name(visitor, mocker):
-    state = make_state(mocker, "Increment_x", "s1")
-    assert visitor._define_name(state) == "CWP_INCREMENT_X"
-
-
-def test_edge_cond_var_with_source(visitor, mocker):
-    src = make_state(mocker, "Start", "s0")
-    dst = make_state(mocker, "Increment_x", "s1")
-    edge = make_edge(mocker, "e1", "x <= 5", source=src, dest=dst)
-    assert visitor._edge_cond_var(edge) == "e_Start_to_Increment_x"
-
-
-def test_edge_cond_var_no_source(visitor, mocker):
-    dst = make_state(mocker, "Start", "s0")
-    edge = make_edge(mocker, "e0", "x == 0", source=None, dest=dst)
-    assert visitor._edge_cond_var(edge) == "e_UNKNOWN_to_Start"
-
-
-# ── mapping function ──────────────────────────────────────────────────────────
-
-
-def test_mapping_function_with_in_and_out_edges(visitor, mocker):
-    src = make_state(mocker, "Start", "s0")
-    mid = make_state(mocker, "Mid", "s1")
-    dst = make_state(mocker, "End", "s2")
-    e_in = make_edge(mocker, "e1", "x <= 5", source=src, dest=mid)
-    e_out = make_edge(mocker, "e2", "x > 5", source=mid, dest=dst)
-    mid.in_edges = [e_in]
-    mid.out_edges = [e_out]
-    result = visitor._mapping_function(mid)
-    assert result == "(e_Start_to_Mid) && !(e_Mid_to_End)"
-
-
-def test_mapping_function_terminal_state(visitor, mocker):
-    src = make_state(mocker, "Mid", "s1")
-    end = make_state(mocker, "End", "s2")
-    e_in = make_edge(mocker, "e2", "x > 5", source=src, dest=end)
-    end.in_edges = [e_in]
-    end.out_edges = []
-    result = visitor._mapping_function(end)
-    assert result == "(e_Mid_to_End) && !(false)"
-
-
-def test_mapping_function_no_in_edges(visitor, mocker):
-    state = make_state(mocker, "Start", "s0")
-    state.in_edges = []
-    state.out_edges = []
-    result = visitor._mapping_function(state)
-    assert result == "(true) && !(false)"
-
-
-# ── visitor callbacks ─────────────────────────────────────────────────────────
-
-
-def test_visit_cwp_sets_init_state(visitor, mocker):
-    model = mocker.Mock(spec=Cwp)
-    start = make_state(mocker, "Start", "s0")
-    init = make_state(mocker, "Increment_x", "s1")
-    edge = make_edge(mocker, "e0", "x == 0", source=None, dest=init)
-    start.out_edges = [edge]
-    model.start_state = start
-    visitor.visit_cwp(model)
-    assert visitor._init_state is init
-    assert visitor._cwp_start_state is start
-
-
-def test_visit_state_with_in_edges_is_tracked(visitor, mocker):
-    e = make_edge(mocker, "e1", "x > 0")
-    state = make_state(mocker, "Mid", "s1", in_edges=[e], out_edges=[])
-    e.source = mocker.Mock()
-    e.dest = state
-    visitor.visit_state(state)
-    assert state in visitor._states
-
-
-def test_visit_state_without_in_edges_not_tracked(visitor, mocker):
-    state = make_state(mocker, "Start", "s0", in_edges=[], out_edges=[])
-    visitor.visit_state(state)
-    assert state not in visitor._states
-
-
-def test_visit_state_deduplicates(visitor, mocker):
-    e = make_edge(mocker, "e1", "x > 0")
-    state = make_state(mocker, "Mid", "s1", in_edges=[e])
-    e.dest = state
-    visitor.visit_state(state)
-    visitor.visit_state(state)
-    assert visitor._states.count(state) == 1
-
-
-def test_visit_state_collects_edges(visitor, mocker):
-    e_in = make_edge(mocker, "e1", "x <= 5")
-    e_out = make_edge(mocker, "e2", "x > 5")
-    e_in.dest = mocker.Mock()
-    e_out.dest = mocker.Mock()
-    state = make_state(mocker, "Mid", "s1", in_edges=[e_in], out_edges=[e_out])
-    visitor.visit_state(state)
-    assert "e1" in visitor._edges
-    assert "e2" in visitor._edges
-
-
-# ── public properties ─────────────────────────────────────────────────────────
-
-
-def test_num_states(visitor, mocker):
-    e = make_edge(mocker, "e1", "x > 0")
-    s = make_state(mocker, "Mid", "s1", in_edges=[e])
-    e.dest = s
-    visitor.visit_state(s)
-    assert visitor.num_states == 1
-
-
-def test_state_define_names(visitor, mocker):
-    e1 = make_edge(mocker, "e1", "x > 0")
-    e2 = make_edge(mocker, "e2", "x > 5")
-    s1 = make_state(mocker, "Increment_x", "s1", in_edges=[e1])
-    s2 = make_state(mocker, "End", "s2", in_edges=[e2])
-    e1.dest = s1
-    e2.dest = s2
-    visitor._states = [s1, s2]
-    assert visitor.state_define_names() == ["CWP_INCREMENT_X", "CWP_END"]
-
-
-def test_reachable_state_define_names_excludes_start(visitor, mocker):
-    e1 = make_edge(mocker, "e0", "x == 0")
-    start = make_state(mocker, "Start", "s0", in_edges=[e1])
-    e2 = make_edge(mocker, "e1", "x <= 5")
-    mid = make_state(mocker, "Increment_x", "s1", in_edges=[e2])
-    e1.dest = start
-    e2.dest = mid
-    visitor._states = [start, mid]
-    visitor._cwp_start_state = start
-    names = visitor.reachable_state_define_names()
-    assert "CWP_START" not in names
-    assert "CWP_INCREMENT_X" in names
-
-
-def test_initial_cwp_state_define(visitor, mocker):
-    e = make_edge(mocker, "e1", "x <= 5")
-    init = make_state(mocker, "Increment_x", "s1", in_edges=[e])
-    e.dest = init
-    visitor._states = [init]
-    visitor._init_state = init
-    assert visitor.initial_cwp_state_define() == "CWP_INCREMENT_X"
-
-
-def test_cwp_reached_init_expr(visitor, mocker):
-    e1 = make_edge(mocker, "e0", "x == 0")
-    s0 = make_state(mocker, "Start", "s0", in_edges=[e1])
-    e2 = make_edge(mocker, "e1", "x <= 5")
-    s1 = make_state(mocker, "Increment_x", "s1", in_edges=[e2])
-    e3 = make_edge(mocker, "e2", "x > 5")
-    s2 = make_state(mocker, "End", "s2", in_edges=[e3])
-    visitor._states = [s0, s1, s2]
-    visitor._init_state = s1
-    assert visitor.cwp_reached_init_expr() == "{false, true, false}"
-
-
-# ── code generation ───────────────────────────────────────────────────────────
-
-
-def test_generate_state_defines(visitor, mocker):
-    e1 = make_edge(mocker, "e1", "x <= 5")
-    e2 = make_edge(mocker, "e2", "x > 5")
-    s1 = make_state(mocker, "Increment_x", "s1", in_edges=[e1])
-    s2 = make_state(mocker, "End", "s2", in_edges=[e2])
-    visitor._states = [s1, s2]
-    output = visitor.generate_state_defines()
-    assert "#define CWP_INCREMENT_X" in output
-    assert "#define CWP_END" in output
-    assert "#define CWP_NUM_STATES" in output
-    assert "2" in output
-
-
-def test_generate_update_cwp_state_contains_key_sections(visitor, mocker):
-    src = make_state(mocker, "Start", "s0")
-    mid = make_state(mocker, "Increment_x", "s1")
-    end = make_state(mocker, "End", "s2")
-
-    e_init = make_edge(mocker, "e0", "x == 0", source=None, dest=src)
-    e_mid = make_edge(mocker, "e1", "x <= 5", source=src, dest=mid)
-    e_end = make_edge(mocker, "e2", "x > 5", source=mid, dest=end)
-
-    mid.in_edges = [e_mid]
-    mid.out_edges = [e_end]
-    end.in_edges = [e_end]
-    end.out_edges = []
-    src.in_edges = [e_init]
-    src.out_edges = [e_mid]
-
-    visitor._states = [src, mid, end]
-    visitor._edges = {"e0": e_init, "e1": e_mid, "e2": e_end}
-
-    output = visitor.generate_update_cwp_state(["int x"])
-
-    assert (
-        "static void update_cwp_state(int *cwp_state, bool cwp_reached[], int x)"
-        in output
+def _program(visitor: CwpCbmcVisitor, main_body: str) -> str:
+    return (
+        f"{HEADER}int x;\n{visitor}\nint main(void) {{\n{main_body}\n return 0;\n}}\n"
     )
-    assert "bool e_UNKNOWN_to_Start" in output
-    assert "bool e_Start_to_Increment_x" in output
-    assert "bool e_Increment_x_to_End" in output
-    assert "bool next_Increment_x" in output
-    assert "bool next_End" in output
-    assert "__CPROVER_assert(" in output
-    assert "CWP P1: transition follows valid CWP edge" in output
-    assert "*cwp_state             = new_state;" in output
-    assert "cwp_reached[new_state] = true;" in output
 
 
-def test_generate_update_cwp_state_edge_condition_with_feel_expression(visitor, mocker):
-    src = make_state(mocker, "Start", "s0")
-    dst = make_state(mocker, "Increment_x", "s1")
+def _write(tmp_path: Path, source: str) -> Path:
+    path = tmp_path / "prog.c"
+    path.write_text(source)
+    return path
 
-    edge = make_edge(mocker, "e1", Feel.parse("x <= 5"), source=src, dest=dst)
-    dst.in_edges = [edge]
-    dst.out_edges = []
-    src.in_edges = []
-    src.out_edges = [edge]
 
-    visitor._states = [dst]
-    visitor._edges = {"e1": edge}
+def _gcc(path: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["gcc", "-Wall", "-Werror", "-o", str(path.with_suffix("")), str(path)],
+        capture_output=True,
+        text=True,
+    )
 
-    output = visitor.generate_update_cwp_state(["int x"])
 
-    # visit_comparision already parenthesizes its own output, so this is
-    # double-wrapped compared to the plain-str sibling test above — harmless,
-    # semantically identical C.
-    assert "bool e_Start_to_Increment_x = ((x <= 5));" in output
+def _cbmc(path: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["cbmc", str(path), "--unwind", "5"], capture_output=True, text=True
+    )
+
+
+class TestStructure:
+    def test_start_state_is_true_others_false(self) -> None:
+        out = str(_generate(_build_cwp()))
+        assert START_STR in out and END_STR in out
+        assert "bool Start = true;" in out
+        assert "bool A = false;" in out
+        assert "bool End = false;" in out
+
+    def test_only_non_start_states_are_summed(self) -> None:
+        v = _generate(_build_cwp())
+        assert v.list_of_cwp_states == ["A", "End"]
+        assert "(int)A + (int)End;" in str(v.build_XOR_block())
+
+    def test_prime_and_mapping_for_intermediate_state(self) -> None:
+        out = str(_generate(_build_cwp()))
+        assert "bool A_prime = ((x == 1)) && !((x == 2));" in out
+        assert "A = ((x == 1)) && !((x == 2));" in out
+
+    def test_end_state_has_no_out_edges(self) -> None:
+        out = str(_generate(_build_cwp()))
+        assert "bool End_prime = ((x == 2)) && !(false);" in out
+
+    def test_branching_state_ors_out_edges(self) -> None:
+        out = str(_generate(_build_cwp(branch=True)))
+        assert "!((x == 2) || (x == 3))" in out
+        assert "|| (A && B_prime)" in out
+
+    def test_edges_and_stationary_paths(self) -> None:
+        v = _generate(_build_cwp())
+        paths = str(v.proper_path_block)
+        assert "|| (Start && A_prime)" in paths
+        assert "|| (A && End_prime)" in paths
+        assert "|| (A && A_prime)" in paths
+        assert "|| (End && End_prime)" in paths
+        assert "Start_prime" not in str(v)  # start state cannot be re-entered
+
+    def test_reassignment(self) -> None:
+        v = _generate(_build_cwp())
+        text = str(v.var_reassignment)
+        assert "Start = false;" in text
+        assert "A = A_prime;" in text
+        assert "End = End_prime;" in text
+
+    def test_assertions_present(self) -> None:
+        out = str(_generate(_build_cwp()))
+        assert "Not a valid CWP transition" in out
+        assert "sumOfActiveStates == 1" in out
+
+    def test_empty_expression_is_true(self) -> None:
+        cwp = Cwp()
+        s, a = CwpState("S", "S"), CwpState("A", "A")
+        cwp.states = {"S": s, "A": a}
+        cwp.start_state = s
+        _link(cwp, s, a, "")
+        assert "bool A_prime = (true) && !(false);" in str(_generate(cwp))
+
+    def test_state_visited_once(self) -> None:
+        cwp = _build_cwp()
+        # a loop back to A from End, marked leaf like the real graph does
+        edge = _link(cwp, cwp.states["End"], cwp.states["A"], "x == 9")
+        edge.is_leaf = True
+        v = _generate(cwp)
+        assert v.list_of_cwp_states == ["A", "End"]
+        assert str(v).count("bool A = false;") == 1
+
+
+class TestCompiles:
+    @pytest.mark.parametrize("branch", [False, True])
+    def test_gcc_compiles(self, tmp_path: Path, branch: bool) -> None:
+        v = _generate(_build_cwp(branch))
+        path = _write(tmp_path, _program(v, "calculateState();\nupdateState();"))
+        result = _gcc(path)
+        assert result.returncode == 0, result.stderr
+
+    def test_valid_run_executes(self, tmp_path: Path) -> None:
+        v = _generate(_build_cwp())
+        body = "x = 1; calculateState(); updateState();\nassert(A);\n"
+        body += "x = 2; calculateState(); updateState();\nassert(End);"
+        path = _write(tmp_path, _program(v, body))
+        assert _gcc(path).returncode == 0
+        assert subprocess.run([str(path.with_suffix(""))]).returncode == 0
+
+
+class TestCbmc:
+    def test_valid_walk_verifies(self, tmp_path: Path) -> None:
+        v = _generate(_build_cwp())
+        body = "x = 1; updateState();\nassert(A && !Start);\n"
+        body += "x = 2; updateState();\nassert(End && !A);\n"
+        body += "updateState();  // staying in the end state is allowed\n"
+        result = _cbmc(_write(tmp_path, _program(v, body)))
+        assert result.returncode == 0, result.stdout
+        assert "VERIFICATION SUCCESSFUL" in result.stdout
+
+    def test_invalid_transition_is_caught(self, tmp_path: Path) -> None:
+        v = _generate(_build_cwp())
+        body = "x = 5; updateState();"  # no edge expression holds
+        result = _cbmc(_write(tmp_path, _program(v, body)))
+        assert result.returncode != 0
+        assert "VERIFICATION FAILED" in result.stdout
+        assert "Not a valid CWP transition" in result.stdout
+
+    def test_two_active_states_is_caught(self, tmp_path: Path) -> None:
+        # Overlapping guards out of A: x == 5 enables both End and B.
+        cwp = _build_cwp(branch=True)
+        cwp.edges["A_End"].expression = "x > 1"
+        cwp.edges["A_B"].expression = "x > 2"
+        v = _generate(cwp)
+        body = "x = 1; updateState();\nx = 5; updateState();"
+        result = _cbmc(_write(tmp_path, _program(v, body)))
+        assert "VERIFICATION FAILED" in result.stdout
+        assert "In more than one or no state" in result.stdout
+
+
+class TestFeelEdges:
+    @staticmethod
+    def _feel_cwp(expr: str) -> Cwp:
+        cwp = _build_cwp()
+        cwp.states["Start"].out_edges[0].expression = parse_expression(expr).unwrap()
+        return cwp
+
+    def test_feel_edge_is_evaluated_once_per_function(self) -> None:
+        v = _generate(self._feel_cwp("x = 1 or x = 5"))
+        assert v.errors == []
+        out = str(v)
+        assert out.count("bool edge0_value = ((x == 1) || (x == 5));") == 2
+        assert "bool A_prime = (edge0_value) && !((x == 2));" in out
+        assert "A = (edge0_value) && !((x == 2));" in out
+
+    def test_choose_is_hoisted_and_shared(self) -> None:
+        v = _generate(self._feel_cwp("choose [true, false]"))
+        out = str(v.prime_vars)
+        assert out.count("unsigned int edge0_choose_0 = nondet_uint();") == 1
+        assert "bool edge0_value = (edge0_choose_0 == 0 ? true : false);" in out
+
+    def test_unsupported_feel_is_an_error(self) -> None:
+        v = _generate(self._feel_cwp("x > 1.5"))
+        assert isinstance(v.result().failure(), FeelCbmcUnsupportedError)
+        assert "#error" in str(v)
+
+    def test_plain_string_edges_are_unchanged(self) -> None:
+        v = _generate(_build_cwp())
+        assert v.result() == Success(str(v))
+
+    @pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc not installed")
+    def test_feel_cwp_in_cbmc(self, tmp_path: Path) -> None:
+        v = _generate(self._feel_cwp("x = 1"))
+        src = _program(v, "x = 1;\ncalculateState();\nupdateState();\nassert(A);")
+        src = src.replace("int x;", "unsigned int nondet_uint(void);\nint x;")
+        run = _cbmc(_write(tmp_path, src))
+        assert "VERIFICATION SUCCESSFUL" in run.stdout, run.stdout

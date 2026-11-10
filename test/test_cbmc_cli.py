@@ -1,313 +1,243 @@
 # type: ignore
+import re
+import shutil
 import sys
 
 import pytest
-from returns.functions import not_
-from returns.io import IOFailure, IOSuccess
+from returns.io import IOSuccess
 from returns.pipeline import is_successful
 from returns.unsafe import unsafe_perform_io
 
-from bpmncwpverify.cli import _verify_with_cbmc_from_files, verify
+from bpmncwpverify.builder.cbmc_builder import CbmcBuilder
+from bpmncwpverify.cli import cli_verify_cbmc, verify
+from bpmncwpverify.core import cbmc
+from bpmncwpverify.core.accessmethods import bpmnmethods
+from bpmncwpverify.core.accessmethods.cwpmethods import CwpXmlParser
 from bpmncwpverify.core.cbmc import (
-    CbmcOutputParser,
     CbmcVerificationReport,
+    _check_assertions,
+    _check_coverage,
     _run_cbmc,
+    verify_with_cbmc,
 )
 from bpmncwpverify.core.error import (
     CbmcAssertionError,
-    CbmcReachabilityError,
-    CbmcSubProcessError,
-    Error,
-    FileReadFileError,
+    CbmcRunError,
+    CbmcUnreachableStateError,
+    get_error_message,
 )
+from bpmncwpverify.core.state import State
+from bpmncwpverify.util.file import element_tree_from_string
 
-CORRECTNESS_SUCCESS = """\
-** Results:
-./tmp/verification.c function update_cwp_state
-[update_cwp_state.assertion.1] line 83 CWP P1: transition follows valid CWP edge: SUCCESS
+FACE2FACE = "./test/resources/face2face/"
+STATE = FACE2FACE + "state.txt"
+CWP = FACE2FACE + "cwp.xml"
+BPMN = FACE2FACE + "workflow.bpmn"
 
-** 0 of 1 failed (1 iterations)
-VERIFICATION SUCCESSFUL
-"""
+needs_cbmc = pytest.mark.skipif(shutil.which("cbmc") is None, reason="No CBMC")
 
-CORRECTNESS_FAILURE = """\
-** Results:
-./tmp/verification.c function update_cwp_state
-[update_cwp_state.assertion.1] line 83 CWP P1: transition follows valid CWP edge: FAILURE
-
-** 1 of 1 failed (2 iterations)
-VERIFICATION FAILED
-"""
-
-REACHABILITY_SUCCESS = """\
-** coverage results:
-[main.coverage.1] file ./tmp/verification.c line 299 function main condition 'Event_1y6wxsp_reached != FALSE': SATISFIED
-[main.coverage.2] file ./tmp/verification.c line 300 function main condition 'Event_0wqympo_reached != FALSE': SATISFIED
-[main.coverage.3] file ./tmp/verification.c line 301 function main condition 'cwp_reached[(signed long int)1] != FALSE': SATISFIED
-[main.coverage.4] file ./tmp/verification.c line 302 function main condition 'cwp_reached[(signed long int)2] != FALSE': SATISFIED
-[main.coverage.5] file ./tmp/verification.c line 303 function main condition 'cwp_reached[(signed long int)3] != FALSE': SATISFIED
-[main.coverage.6] file ./tmp/verification.c line 304 function main condition 'cwp_reached[(signed long int)4] != FALSE': SATISFIED
-[main.coverage.7] file ./tmp/verification.c line 305 function main condition 'cwp_reached[(signed long int)5] != FALSE': SATISFIED
-** 7 of 7 covered (100.0%)
-"""
-
-REACHABILITY_FAILURE = """\
-** coverage results:
-[main.coverage.1] file ./tmp/verification.c line 299 function main condition 'Event_1y6wxsp_reached != FALSE': FAILED
-[main.coverage.2] file ./tmp/verification.c line 300 function main condition 'Event_0wqympo_reached != FALSE': SATISFIED
-[main.coverage.3] file ./tmp/verification.c line 301 function main condition 'cwp_reached[(signed long int)1] != FALSE': SATISFIED
-** 0 of 3 covered (0.0%)
-"""
-
-SUBPROCESS_ERROR = ""
-
-# ── File-path error tests ──────────────────────────────────────────────────────
+CLEAN_ASSERT_REPORT = "** 0 of 29 failed (1 iterations)\nVERIFICATION SUCCESSFUL\n"
+CLEAN_COVER_REPORT = "** 6 of 6 covered (100.0%)\n"
 
 
-def test_bad_state_file_returns_file_read_error():
-    result = _verify_with_cbmc_from_files(
-        "missing_state.txt",
-        "./test/resources/face2face/cwp.xml",
-        "./test/resources/face2face/workflow.bpmn",
-    )
-    assert not_(is_successful)(result)
-    error: Error = unsafe_perform_io(result.failure())
-    assert isinstance(error, FileReadFileError)
+def _read(path):
+    with open(path) as f:
+        return f.read()
 
 
-def test_bad_cwp_file_returns_file_read_error():
-    result = _verify_with_cbmc_from_files(
-        "./test/resources/face2face/state.txt",
-        "missing_cwp.xml",
-        "./test/resources/face2face/workflow.bpmn",
-    )
-    assert not_(is_successful)(result)
-    error: Error = unsafe_perform_io(result.failure())
-    assert isinstance(error, FileReadFileError)
-
-
-def test_bad_bpmn_file_returns_file_read_error():
-    result = _verify_with_cbmc_from_files(
-        "./test/resources/face2face/state.txt",
-        "./test/resources/face2face/cwp.xml",
-        "missing_workflow.bpmn",
-    )
-    assert not_(is_successful)(result)
-    error: Error = unsafe_perform_io(result.failure())
-    assert isinstance(error, FileReadFileError)
-
-
-# ── Mutually exclusive flag test ───────────────────────────────────────────────
-
-
-def test_cloud_and_cbmc_together_prints_error_and_returns(capsys, mocker):
-    mocker.patch("bpmncwpverify.cli._verify_on_lambda_from_files")
-    mocker.patch("bpmncwpverify.cli._verify_with_cbmc_from_files")
-    sys.argv = [
-        "verify",
-        "--cloud",
-        "--cbmc",
-        "./test/resources/face2face/state.txt",
-        "./test/resources/face2face/cwp.xml",
-        "./test/resources/face2face/workflow.bpmn",
-    ]
-    with pytest.raises(SystemExit) as exc_info:
-        verify()
-    assert exc_info.value.code == 2
-    captured = capsys.readouterr()
-    assert "not allowed with argument" in captured.err
-    from bpmncwpverify.cli import (
-        _verify_on_lambda_from_files,
-        _verify_with_cbmc_from_files,
+def _parse(state_path, cwp_path, bpmn_text):
+    state = State.from_str(_read(state_path)).unwrap()
+    cwp_xml = unsafe_perform_io(element_tree_from_string(_read(cwp_path)).unwrap())
+    bpmn_xml = unsafe_perform_io(element_tree_from_string(bpmn_text).unwrap())
+    return (
+        state,
+        CwpXmlParser.from_xml(cwp_xml, state).unwrap(),
+        bpmnmethods.from_xml(bpmn_xml, state).unwrap(),
     )
 
-    _verify_on_lambda_from_files.assert_not_called()
-    _verify_with_cbmc_from_files.assert_not_called()
 
-
-# ── Routing test ───────────────────────────────────────────────────────────────
-
-
-def test_cbmc_flag_routes_to_cbmc_verifier(mocker):
-    mock_cbmc = mocker.patch(
-        "bpmncwpverify.cli._verify_with_cbmc_from_files",
-        return_value=IOSuccess(
-            CbmcVerificationReport(
-                file_path="./tmp/verification.c",
-                c_code="",
-                bound=5,
-                correctness_output=CORRECTNESS_SUCCESS,
-                reachability_output=REACHABILITY_SUCCESS,
-            )
-        ),
+def _with_update_state(tmp_path):
+    """face2face's workflow, with every behavior ending in updateState()."""
+    text = _read(BPMN).replace(
+        "</bpmn:documentation>", "\nupdateState()</bpmn:documentation>"
     )
-    sys.argv = [
-        "verify",
-        "--cbmc",
-        "./test/resources/face2face/state.txt",
-        "./test/resources/face2face/cwp.xml",
-        "./test/resources/face2face/workflow.bpmn",
-    ]
-    verify()
-    mock_cbmc.assert_called_once()
+    path = tmp_path / "workflow.bpmn"
+    path.write_text(text)
+    return str(path)
 
 
-# ── CbmcOutputParser unit tests ────────────────────────────────────────────────
+@pytest.fixture
+def outputs(tmp_path, monkeypatch):
+    monkeypatch.setattr(cbmc, "OUTPUT_FILE", str(tmp_path / "verification.c"))
+    monkeypatch.setattr(cbmc, "COVERAGE_OUTPUT_FILE", str(tmp_path / "cover.c"))
+    return tmp_path
 
 
-def test_parser_correctness_success():
-    parser = CbmcOutputParser()
-    result = parser.check_correctness(CORRECTNESS_SUCCESS)
-    assert is_successful(result)
+def test_builder_state_coverage_marks_every_state():
+    state, cwp, bpmn = _parse(STATE, CWP, _read(BPMN))
+    builder = CbmcBuilder().with_state(state).with_cwp(cwp).with_bpmn(bpmn)
+
+    plain = builder.build().unwrap()
+    covered = builder.with_state_coverage(True).build().unwrap()
+
+    assert "__CPROVER_cover" not in plain
+    assert len(re.findall(r"__CPROVER_cover\(\w+\);", covered)) == len(cwp.states)
+    assert "__CPROVER_cover(Negotiations);" in covered
 
 
-def test_parser_correctness_failure_returns_assertion_error():
-    parser = CbmcOutputParser()
-    result = parser.check_correctness(CORRECTNESS_FAILURE)
-    assert not is_successful(result)
+def test_check_assertions_passes_on_clean_report():
+    assert is_successful(_check_assertions(CLEAN_ASSERT_REPORT))
+
+
+def test_check_assertions_reports_failures():
+    report = (
+        '[updateState.assertion.1] line 48 assertion validTransition && "Not a valid CWP transition": FAILURE\n'
+        "[main.unwind.0] line 9 unwinding assertion loop 0: FAILURE\n"
+        "[f.assertion.2] line 7 assertion x == 1: SUCCESS\n"
+    )
+
+    result = _check_assertions(report)
+
     error = result.failure()
     assert isinstance(error, CbmcAssertionError)
-    assert len(error.failures) > 0
+    assert [(f["function"], f["line"], f["assertion"]) for f in error.failures] == [
+        ("updateState", "48", "Not a valid CWP transition"),
+        ("main", "9", "unwinding assertion loop 0"),
+    ]
 
 
-def test_parser_correctness_subprocess_error_on_empty():
-    parser = CbmcOutputParser()
-    result = parser.check_correctness(SUBPROCESS_ERROR)
-    assert not is_successful(result)
-    assert isinstance(result.failure(), CbmcSubProcessError)
-
-
-def test_parser_reachability_success():
-    parser = CbmcOutputParser()
-    result = parser.check_reachability(REACHABILITY_SUCCESS)
-    assert is_successful(result)
-
-
-def test_parser_reachability_failure_returns_reachability_error():
-    parser = CbmcOutputParser()
-    result = parser.check_reachability(REACHABILITY_FAILURE)
-    assert not is_successful(result)
-    error = result.failure()
-    assert isinstance(error, CbmcReachabilityError)
-    assert len(error.unsatisfied_goals) > 0
-
-
-def test_parser_reachability_subprocess_error_on_empty():
-    parser = CbmcOutputParser()
-    result = parser.check_reachability(SUBPROCESS_ERROR)
-    assert not is_successful(result)
-    assert isinstance(result.failure(), CbmcSubProcessError)
-
-
-# ── Integration tests (requires cbmc binary) ──────────────────────────────────
-
-
-def test_face2face_with_cbmc_returns_success():
-    result = _verify_with_cbmc_from_files(
-        "./test/resources/face2face/feel/state.txt",
-        "./test/resources/face2face/feel/cwp.xml",
-        "./test/resources/face2face/feel/workflow.bpmn",
+def test_check_coverage_ignores_start_state_and_reports_the_rest():
+    _, cwp, _ = _parse(STATE, CWP, _read(BPMN))
+    report = (
+        "[updateState.coverage.1] file fc.c line 50 function updateState condition 'Start != FALSE': FAILED\n"
+        "[updateState.coverage.2] file fc.c line 52 function updateState condition 'Negotiations != FALSE': FAILED\n"
+        "[updateState.coverage.3] file fc.c line 54 function updateState condition 'Purchase_Failed != FALSE': SATISFIED\n"
     )
-    assert is_successful(result)
+
+    error = _check_coverage(report, cwp).failure()
+
+    assert isinstance(error, CbmcUnreachableStateError)
+    assert error.states == ["Negotiations"]
+    assert is_successful(_check_coverage(CLEAN_COVER_REPORT, cwp))
+
+
+def test_run_cbmc_fails_when_cbmc_cannot_run(mocker):
+    mocker.patch.object(cbmc.subprocess, "run", side_effect=FileNotFoundError("cbmc"))
+
+    result = _run_cbmc("x.c", [])
+
+    assert isinstance(unsafe_perform_io(result.failure()), CbmcRunError)
+
+
+def test_run_cbmc_fails_on_cbmc_error_exit_code(tmp_path):
+    bad = tmp_path / "bad.c"
+    bad.write_text("this is not C")
+
+    result = _run_cbmc(str(bad), [])
+
+    error = unsafe_perform_io(result.failure())
+    assert isinstance(error, CbmcRunError)
+    assert "exit code" in get_error_message(error)
+
+
+def test_verify_with_cbmc_passes_when_both_runs_are_clean(mocker, outputs):
+    run = mocker.patch.object(
+        cbmc,
+        "_run_cbmc",
+        side_effect=[IOSuccess(CLEAN_ASSERT_REPORT), IOSuccess(CLEAN_COVER_REPORT)],
+    )
+    state, cwp, bpmn = _parse(STATE, CWP, _read(BPMN))
+
+    result = verify_with_cbmc(state, cwp, bpmn)
+
     report = unsafe_perform_io(result.unwrap())
     assert isinstance(report, CbmcVerificationReport)
-    assert report.bound > 0
+    assert "VERIFICATION SUCCESSFUL" in report.cbmc_report
+    assert report.file_path == cbmc.OUTPUT_FILE
+    assert "int main(void)" in report.c_code
+    assert "--unwinding-assertions" in run.call_args_list[0].args[1]
+    assert run.call_args_list[1].args[1][-2:] == ["--cover", "cover"]
+    assert "__CPROVER_cover" in _read(cbmc.COVERAGE_OUTPUT_FILE)
+    assert "__CPROVER_cover" not in _read(cbmc.OUTPUT_FILE)
 
 
-# ── Failure-path wiring (real build, cbmc mocked) ──────────────────────────────
+def test_verify_with_cbmc_stops_at_assertion_failure(mocker, outputs):
+    failing = "[f.assertion.1] line 3 assertion x == 1: FAILURE\n"
+    run = mocker.patch.object(cbmc, "_run_cbmc", return_value=IOSuccess(failing))
+    state, cwp, bpmn = _parse(STATE, CWP, _read(BPMN))
+
+    result = verify_with_cbmc(state, cwp, bpmn)
+
+    assert isinstance(unsafe_perform_io(result.failure()), CbmcAssertionError)
+    assert run.call_count == 1
 
 
-def test_correctness_failure_propagates_assertion_error(mocker):
-    # Only the correctness run should fire; reachability must be short-circuited
-    # (a second _run_cbmc call would exhaust side_effect and raise StopIteration).
-    mocker.patch(
-        "bpmncwpverify.core.cbmc._run_cbmc",
-        side_effect=[IOSuccess(CORRECTNESS_FAILURE)],
+def test_verify_with_cbmc_reports_unreachable_state(mocker, outputs):
+    cover = "[u.coverage.1] file c.c line 5 function u condition 'Negotiations != FALSE': FAILED\n"
+    mocker.patch.object(
+        cbmc,
+        "_run_cbmc",
+        side_effect=[IOSuccess(CLEAN_ASSERT_REPORT), IOSuccess(cover)],
     )
-    result = _verify_with_cbmc_from_files(
-        "./test/resources/face2face/feel/state.txt",
-        "./test/resources/face2face/feel/cwp.xml",
-        "./test/resources/face2face/feel/workflow.bpmn",
-    )
-    assert not_(is_successful)(result)
+    state, cwp, bpmn = _parse(STATE, CWP, _read(BPMN))
+
+    result = verify_with_cbmc(state, cwp, bpmn)
+
+    error = unsafe_perform_io(result.failure())
+    assert isinstance(error, CbmcUnreachableStateError)
+    assert error.states == ["Negotiations"]
+
+
+@needs_cbmc
+def test_cbmc_end_to_end_reports_unreachable_states(outputs):
+    result = cli_verify_cbmc(STATE, CWP, BPMN)
+
+    error = unsafe_perform_io(result.failure())
+    assert isinstance(error, CbmcUnreachableStateError)
+    assert "Negotiations" in error.states
+    assert "Start" not in error.states
+
+
+@needs_cbmc
+def test_cbmc_end_to_end_reports_assertion_failure(outputs):
+    result = cli_verify_cbmc(STATE, CWP, _with_update_state(outputs))
+
     error = unsafe_perform_io(result.failure())
     assert isinstance(error, CbmcAssertionError)
+    assert any(f["assertion"] == "Not a valid CWP transition" for f in error.failures)
 
 
-def test_reachability_failure_propagates_reachability_error(mocker):
-    mocker.patch(
-        "bpmncwpverify.core.cbmc._run_cbmc",
-        side_effect=[IOSuccess(CORRECTNESS_SUCCESS), IOSuccess(REACHABILITY_FAILURE)],
+def test_cli_verify_cbmc_bad_file_is_io_error():
+    result = cli_verify_cbmc("missing.txt", CWP, BPMN)
+
+    assert not is_successful(result)
+
+
+def test_verify_with_cbmc_flag_prints_report(mocker, capsys):
+    report = CbmcVerificationReport("f.c", "code", [], "THE REPORT")
+    cli = mocker.patch(
+        "bpmncwpverify.cli.cli_verify_cbmc", return_value=IOSuccess(report)
     )
-    result = _verify_with_cbmc_from_files(
-        "./test/resources/face2face/feel/state.txt",
-        "./test/resources/face2face/feel/cwp.xml",
-        "./test/resources/face2face/feel/workflow.bpmn",
-    )
-    assert not_(is_successful)(result)
-    error = unsafe_perform_io(result.failure())
-    assert isinstance(error, CbmcReachabilityError)
+    spin = mocker.patch("bpmncwpverify.cli.cli_verify")
+    sys.argv = ["verify", "--cbmc", STATE, CWP, BPMN]
 
-
-# ── _run_cbmc subprocess-failure branch ────────────────────────────────────────
-
-
-def test_run_cbmc_subprocess_failure_returns_subprocess_error(mocker):
-    mocker.patch(
-        "bpmncwpverify.core.cbmc.subprocess.run",
-        side_effect=FileNotFoundError("cbmc not on PATH"),
-    )
-    result = _run_cbmc(["cbmc", "./tmp/verification.c"])
-    assert not_(is_successful)(result)
-    error = unsafe_perform_io(result.failure())
-    assert isinstance(error, CbmcSubProcessError)
-    assert error.command == "cbmc"
-
-
-# ── verify() printed output ────────────────────────────────────────────────────
-
-
-def test_verify_cbmc_success_prints_report(capsys, mocker):
-    mocker.patch(
-        "bpmncwpverify.cli._verify_with_cbmc_from_files",
-        return_value=IOSuccess(
-            CbmcVerificationReport(
-                file_path="./tmp/verification.c",
-                c_code="",
-                bound=5,
-                correctness_output=CORRECTNESS_SUCCESS,
-                reachability_output=REACHABILITY_SUCCESS,
-            )
-        ),
-    )
-    sys.argv = [
-        "verify",
-        "--cbmc",
-        "./test/resources/face2face/state.txt",
-        "./test/resources/face2face/cwp.xml",
-        "./test/resources/face2face/workflow.bpmn",
-    ]
     verify()
-    out = capsys.readouterr().out
-    assert "CBMC VERIFICATION SUCCESSFUL" in out
-    assert "C file:      ./tmp/verification.c" in out
-    assert "BOUND:       5  (--unwind 6)" in out
-    # REACHABILITY_SUCCESS contains 7 ': SATISFIED' goals.
-    assert "7 CWP states reachable" in out
+
+    cli.assert_called_once_with(STATE, CWP, BPMN)
+    spin.assert_not_called()
+    assert "THE REPORT" in capsys.readouterr().out
 
 
-def test_verify_cbmc_failure_prints_error_message(capsys, mocker):
-    mocker.patch(
-        "bpmncwpverify.cli._verify_with_cbmc_from_files",
-        return_value=IOFailure(CbmcSubProcessError("cbmc")),
-    )
-    sys.argv = [
-        "verify",
-        "--cbmc",
-        "./test/resources/face2face/state.txt",
-        "./test/resources/face2face/cwp.xml",
-        "./test/resources/face2face/workflow.bpmn",
-    ]
+def test_verify_with_cbmc_flag_prints_error_message(capsys):
+    sys.argv = ["verify", "--cbmc", "missing.txt", CWP, BPMN]
+
     verify()
-    out = capsys.readouterr().out
-    assert "CBMC ERROR: failed to run 'cbmc'" in out
+
+    assert capsys.readouterr().out.strip() != ""
+
+
+def test_cbmc_and_cloud_flags_are_exclusive():
+    sys.argv = ["verify", "--cbmc", "--cloud", STATE, CWP, BPMN]
+
+    with pytest.raises(SystemExit):
+        verify()

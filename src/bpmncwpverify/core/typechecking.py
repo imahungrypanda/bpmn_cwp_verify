@@ -41,43 +41,15 @@ def get_computation_type_result(
     rtype: str,
     error: Callable[[str, str], Error] = TypingAssignCompatabilityError,
 ) -> Result[str, Error]:
-    if ltype == BOOL or rtype == BOOL:
+    if ltype in {BIT, BOOL} or rtype in {BIT, BOOL}:
         return Failure(error(ltype, rtype))
-
-    if ltype == BIT:
-        ltype = BYTE
-    if rtype == BIT:
-        rtype = BYTE
-
-    if ltype == rtype:
+    elif ltype == rtype:
         return Success(ltype)
     elif "int" in [ltype, rtype]:
         return Success("int")
     elif "short" in [ltype, rtype]:
         return Success("short")
     return Failure(error(ltype, rtype))
-
-
-def get_widened_type_result(ltype: str, rtype: str) -> Result[str, Error]:
-    if ltype == rtype:
-        return Success(ltype)
-
-    if BOOL in ltype and BOOL not in rtype or BOOL in rtype and BOOL not in ltype:
-        return Failure(TypingAssignCompatabilityError(ltype, rtype))
-
-    if INT in [ltype, rtype]:
-        return Success(INT)
-
-    if SHORT in [ltype, rtype]:
-        return Success(SHORT)
-
-    if BYTE in [ltype, rtype]:
-        return Success(BYTE)
-
-    if BIT in [ltype, rtype]:
-        return Success(BIT)
-
-    return Failure(TypingAssignCompatabilityError(ltype, rtype))
 
 
 def get_relational_type_result(

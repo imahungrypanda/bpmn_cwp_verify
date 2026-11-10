@@ -4,7 +4,7 @@ from xml.etree.ElementTree import Element
 
 from bs4 import BeautifulSoup
 
-from bpmncwpverify.core.feel import Feel
+from bpmncwpverify.core.feel_tree import FeelNode
 
 
 class Cwp:
@@ -61,7 +61,7 @@ class CwpEdge:
     def __init__(self, id: str, name: str) -> None:
         self.id = id
         self.name = name
-        self.expression: Feel | str = (
+        self.expression: str | FeelNode = (
             ""  # TODO: expression needs to always be on an edge and cannot be empty
         )
         self.parent_id: str
@@ -143,10 +143,6 @@ class CwpEdge:
         ).strip()  # strips all extra spaces and leading/ending whitespace if any
 
         return decoded
-
-    @staticmethod
-    def build_ast(expression: str) -> Feel:
-        return Feel.parse(expression)
 
     @staticmethod
     def from_xml(element: Element, name: str) -> "CwpEdge":

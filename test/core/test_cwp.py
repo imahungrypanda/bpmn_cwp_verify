@@ -144,38 +144,50 @@ def test_invalid_cwp_no_end_state():
     "input, expected",
     [
         (
-            "&lt;div&gt;paymentOwner = buyerName and backpackOwner = sellerName&lt;/div&gt;",
-            "paymentOwner = buyerName and backpackOwner = sellerName",
+            "&lt;div&gt;paymentOwner == buyerName &amp;amp;&amp;amp;&lt;/div&gt;&lt;div&gt;backpackOwner == sellerName&lt;br&gt;&lt;/div&gt;",
+            "paymentOwner == buyerName && backpackOwner == sellerName",
         ),
         (
-            "terms=noRetry or paymentOffered = noRetryPayment",
-            "terms = noRetry or paymentOffered = noRetryPayment",
+            "terms==noRetry ||paymentOffered == noRetryPayment",
+            "terms == noRetry || paymentOffered == noRetryPayment",
         ),
         (
-            "terms = agreed  and &lt;br&gt;paymentOffered = paymentAmount",
-            "terms = agreed and paymentOffered = paymentAmount",
+            "terms == agreed &amp;amp;&amp;amp;&lt;br&gt;paymentOffered == paymentAmount",
+            "terms == agreed && paymentOffered == paymentAmount",
         ),
         (
-            "terms != pending or &lt;br&gt;paymentOffered != pendingPayment",
-            "terms != pending or paymentOffered != pendingPayment",
+            "terms != pending ||&lt;br&gt;paymentOffered != pendingPayment",
+            "terms != pending || paymentOffered != pendingPayment",
         ),
         ("x &amp;gt; 5", "x > 5"),
         ("x &amp;lt;= 5", "x <= 5"),
         (
-            "(search = on and blackBox = missing and risk = assessing&amp;nbsp;&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212)); color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;and uuvComms = wait and conditions = changed)&lt;/span&gt;",
-            "(search = on and blackBox = missing and risk = assessing and uuvComms = wait and conditions = changed)",
+            "(search == on &amp;amp;&amp;amp; blackBox == missing &amp;amp;&amp;amp; risk == assessing&amp;nbsp;&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212)); color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;&amp;amp;&amp;amp; uuvComms == wait &amp;amp;&amp;amp; conditions == changed)&lt;/span&gt;",
+            "(search == on && blackBox == missing && risk == assessing && uuvComms == wait && conditions == changed)",
         ),
         (
-            "&lt;div&gt;paymentOwner = buyerName and &lt;span style=&quot;color:red;&quot;&gt;status = paid&lt;/span&gt; and backpackOwner = sellerName &lt;span style=&quot;background:yellow;&quot;&gt;and shipped = true&lt;/span&gt;&lt;/div&gt;",
-            "paymentOwner = buyerName and status = paid and backpackOwner = sellerName and shipped = true",
+            "&lt;div&gt;paymentOwner == buyerName &amp;amp;&amp;amp; &lt;span style=&quot;color:red;&quot;&gt;status == paid&lt;/span&gt; &amp;amp;&amp;amp; backpackOwner == sellerName &lt;span style=&quot;background:yellow;&quot;&gt;&amp;amp;&amp;amp; shipped == true&lt;/span&gt;&lt;/div&gt;",
+            "paymentOwner == buyerName && status == paid && backpackOwner == sellerName && shipped == true",
         ),
         (
-            "terms !=NoRetry or bucketsOfMoney or not(suspicousSeller)",
-            "terms != NoRetry or bucketsOfMoney or not(suspicousSeller)",
+            "&lt;div&gt;user == loggedIn &amp;amp;&amp;amp; &lt;span style=&quot;color:blue;&quot;&gt;status == active &lt;span style=&quot;color:red;&quot;&gt;HIGHPRIORITY&lt;/span&gt;&lt;/span&gt; &amp;amp;&amp;amp; role == admin&lt;/div&gt;",
+            "user == loggedIn && status == active && HIGHPRIORITY && role == admin",
         ),
         (
-            "user = loggedIn and status = active and ALERT and HIGHPRIORITY and role = admin",
-            "user = loggedIn and status = active and ALERT and HIGHPRIORITY and role = admin",
+            "terms !=NoRetry || bucketsOfMoney|| !suspicousSeller",
+            "terms != NoRetry || bucketsOfMoney || !suspicousSeller",
+        ),
+        (
+            "bucketsOfMoney &&!suspicousSeller",
+            "bucketsOfMoney && !suspicousSeller",
+        ),
+        (
+            "&lt;div&gt;(user==loggedIn)&amp;amp;&amp;amp;&nbsp;&lt;span style=&quot;color:blue;&quot;&gt;status==active&lt;br&gt;&lt;span style=&quot;color:red;&quot;&gt;!HIGHPRIORITY&lt;/span&gt;&lt;/span&gt;&amp;amp;&amp;amp;role==admin&lt;/div&gt;",
+            "(user == loggedIn) && status == active && !HIGHPRIORITY && role == admin",
+        ),
+        (
+            "&lt;div&gt;user == loggedIn &amp;amp;&amp;amp; &lt;span style=&quot;color:blue;&quot;&gt;status == active &lt;span style=&quot;color:green;&quot;&gt;ALERT &lt;span style=&quot;color:red;&quot;&gt;HIGHPRIORITY&lt;/span&gt;&lt;/span&gt;&lt;/span&gt; &amp;amp;&amp;amp; role == admin&lt;/div&gt;",
+            "user == loggedIn && status == active && ALERT && HIGHPRIORITY && role == admin",
         ),
     ],
 )

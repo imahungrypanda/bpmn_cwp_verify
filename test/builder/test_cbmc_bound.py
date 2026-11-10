@@ -1,269 +1,238 @@
-# type: ignore
-"""
-Unit and integration tests for the CBMC bound computation helpers in cbmc_builder.py.
-
-Covers:
-  - _acyclic_depth:  sequential, XOR-split (max not min), back-edges, AND-fork correction
-  - _find_matching_join: convergence cases and no-convergence
-  - compute_bound: end-to-end with real BPMN fixtures (simple_example, face2face)
-"""
-
-from pathlib import Path
-
-import pytest
-from returns.pipeline import is_successful
-from returns.unsafe import unsafe_perform_io
-
-from bpmncwpverify.builder.cbmc_bound import (
-    _acyclic_depth,
-    _find_matching_join,
-    compute_bound,
-)
-from bpmncwpverify.core.accessmethods import bpmnmethods
+from bpmncwpverify.builder.cbmc_bound import compute_unwind_bound
 from bpmncwpverify.core.bpmn import (
+    Bpmn,
     EndEvent,
     ExclusiveGatewayNode,
+    Node,
     ParallelGatewayNode,
+    Process,
     SequenceFlow,
     StartEvent,
     Task,
 )
-from bpmncwpverify.core.error import get_error_message
-from bpmncwpverify.core.state import State
-from bpmncwpverify.util.file import element_tree_from_string, read_file_as_string
-
-# ── Graph builder helpers ──────────────────────────────────────────────────────
-
-RESOURCES = Path(__file__).parent.parent / "resources"
 
 
-def _task(id_: str) -> Task:
-    return Task(id_, id_, "")
+class Graph:
+    """Small helper that wires nodes together the way ProcessBuilder does."""
+
+    def __init__(self) -> None:
+        self.process = Process("p", "p")
+        self._flows = 0
+
+    def start(self, id: str = "start") -> StartEvent:
+        node = StartEvent(id, id, "", "")
+        self.process[id] = node
+        return node
+
+    def end(self, id: str) -> EndEvent:
+        node = EndEvent(id, id, "", "")
+        self.process[id] = node
+        return node
+
+    def task(self, id: str) -> Task:
+        node = Task(id, id, "")
+        self.process[id] = node
+        return node
+
+    def xor(self, id: str) -> ExclusiveGatewayNode:
+        node = ExclusiveGatewayNode(id, id)
+        self.process[id] = node
+        return node
+
+    def par(self, id: str) -> ParallelGatewayNode:
+        node = ParallelGatewayNode(id, id)
+        self.process[id] = node
+        return node
+
+    def link(self, *nodes: Node) -> None:
+        for source, target in zip(nodes, nodes[1:]):
+            self._flows += 1
+            flow = SequenceFlow(f"f{self._flows}", "")
+            flow.source_node = source
+            flow.target_node = target
+            source.add_out_flow(flow)
+            target.add_in_flow(flow)
+            self.process[flow.id] = flow
+
+    def bpmn(self, *others: "Graph") -> Bpmn:
+        bpmn = Bpmn()
+        for graph in (self, *others):
+            bpmn.processes[graph.process.id] = graph.process
+        return bpmn
 
 
-def _end(id_: str) -> EndEvent:
-    return EndEvent(id_, id_, "", "")
+def test_straight_line():
+    # start, a, b, end run once each: 4 steps, +1 because --unwind N allows N-1 iterations
+    g = Graph()
+    start, a, b, end = g.start(), g.task("a"), g.task("b"), g.end("end")
+    g.link(start, a, b, end)
+    assert compute_unwind_bound(g.bpmn()) == 5
 
 
-def _start(id_: str) -> StartEvent:
-    return StartEvent(id_, id_, "", "")
+def test_empty_bpmn():
+    # Nothing runs, so only the +1 is left
+    assert compute_unwind_bound(Bpmn()) == 1
 
 
-def _xor(id_: str) -> ExclusiveGatewayNode:
-    return ExclusiveGatewayNode(id_, id_)
+def test_exclusive_gateway_takes_longest_branch():
+    # Only one branch runs, so the cost is the longer one (a1, a2), not both
+    g = Graph()
+    start, gw, end = g.start(), g.xor("gw"), g.end("end")
+    a1, a2, b = g.task("a1"), g.task("a2"), g.task("b")
+    merge = g.xor("merge")
+    g.link(start, gw)
+    g.link(gw, a1, a2, merge)
+    g.link(gw, b, merge)
+    g.link(merge, end)
+    # start, gw, a1, a2, merge, end = 6
+    assert compute_unwind_bound(g.bpmn()) == 7
 
 
-def _and_join(id_: str) -> ParallelGatewayNode:
-    return ParallelGatewayNode(id_, id_, is_fork=False)
+def test_exclusive_split_to_separate_ends():
+    # Branches never meet: start, gw, then max(a, b1 b2) end
+    g = Graph()
+    start, gw = g.start(), g.xor("gw")
+    a, b1, b2 = g.task("a"), g.task("b1"), g.task("b2")
+    g.link(start, gw)
+    g.link(gw, a, g.end("e1"))
+    g.link(gw, b1, b2, g.end("e2"))
+    # start, gw, b1, b2, e2 = 5
+    assert compute_unwind_bound(g.bpmn()) == 6
 
 
-def _connect(source, target, flow_id: str | None = None) -> SequenceFlow:
-    """Wire source → target with a SequenceFlow. Uses add_out_flow so
-    ParallelGatewayNode.is_fork is set automatically on the second outflow."""
-    flow = SequenceFlow(flow_id or f"f_{source.id}_{target.id}", "")
-    flow.source_node = source
-    flow.target_node = target
-    source.add_out_flow(flow)
-    target.add_in_flow(flow)
-    return flow
+def test_parallel_gateway_adds_every_branch_and_counts_join_once():
+    g = Graph()
+    start, fork, join, end = g.start(), g.par("fork"), g.par("join"), g.end("end")
+    a1, a2, b = g.task("a1"), g.task("a2"), g.task("b")
+    g.link(start, fork)
+    g.link(fork, a1, a2, join)
+    g.link(fork, b, join)
+    g.link(join, end)
+    # start, fork, a1, a2, b, join, end = 7 (every token runs; join and end once)
+    assert compute_unwind_bound(g.bpmn()) == 8
 
 
-def _load_bpmn(state_path: Path, bpmn_path: Path):
-    state_str = unsafe_perform_io(read_file_as_string(str(state_path)).unwrap())
-    bpmn_str = unsafe_perform_io(read_file_as_string(str(bpmn_path)).unwrap())
-    state_result = State.from_str(state_str)
-    assert is_successful(state_result), get_error_message(state_result.failure())
-    bpmn_xml = unsafe_perform_io(element_tree_from_string(bpmn_str).unwrap())
-    bpmn_result = bpmnmethods.from_xml(bpmn_xml, state_result.unwrap())
-    assert is_successful(bpmn_result), get_error_message(bpmn_result.failure())
-    return bpmn_result.unwrap()
+def test_loop_body_counted_twice():
+    # start -> head -> body -> check -> (back to head | end)
+    g = Graph()
+    start, head, body = g.start(), g.xor("head"), g.task("body")
+    check, end = g.xor("check"), g.end("end")
+    g.link(start, head, body, check)
+    g.link(check, head)
+    g.link(check, end)
+    # start 1 + loop {head, body, check} 3 nodes * 2 passes + end 1 = 8
+    assert compute_unwind_bound(g.bpmn()) == 9
 
 
-# ── _acyclic_depth ─────────────────────────────────────────────────────────────
+def test_loop_iterations_parameter():
+    g = Graph()
+    start, head, body = g.start(), g.xor("head"), g.task("body")
+    check, end = g.xor("check"), g.end("end")
+    g.link(start, head, body, check)
+    g.link(check, head)
+    g.link(check, end)
+    # 1 + 3 * 3 + 1 = 11
+    assert compute_unwind_bound(g.bpmn(), loop_iterations=3) == 12
 
 
-class TestAcyclicDepth:
-    def test_end_event_returns_one(self):
-        end = _end("e")
-        assert _acyclic_depth(end, frozenset()) == 1
-
-    def test_linear_chain(self):
-        # start → task → end   depth = 3
-        start, task, end = _start("s"), _task("t"), _end("e")
-        _connect(start, task)
-        _connect(task, end)
-        assert _acyclic_depth(start, frozenset()) == 3
-
-    def test_node_already_in_path_returns_minus_one(self):
-        task = _task("t")
-        assert _acyclic_depth(task, frozenset({"t"})) == -1
-
-    def test_node_with_no_outflows_returns_minus_one(self):
-        # a task with no outgoing flows and not an EndEvent
-        task = _task("t")
-        assert _acyclic_depth(task, frozenset()) == -1
-
-    def test_back_edge_excluded(self):
-        # xor → task (back-edge): task has already been visited
-        # Only valid branch is the end event, so depth = 1.
-        xor = _xor("xor")
-        end = _end("e")
-        task = _task("t")
-        _connect(xor, end)
-        _connect(xor, task)
-        _connect(task, xor)  # back-edge (will be excluded via path)
-        # Simulate: xor is reached after visiting task (task is already in path)
-        assert _acyclic_depth(xor, frozenset({"t"})) == 2  # 1(xor) + 1(end)
-
-    def test_xor_uses_max_not_min(self):
-        # xor → end (depth 1)
-        # xor → task → end2 (depth 2)
-        # With MAX the xor depth is 1 + 2 = 3; with MIN it would be 1 + 1 = 2.
-        xor = _xor("xor")
-        end = _end("e1")
-        task = _task("t")
-        end2 = _end("e2")
-        _connect(xor, end)
-        _connect(xor, task)
-        _connect(task, end2)
-        assert _acyclic_depth(xor, frozenset()) == 3
-
-    def test_and_fork_corrects_double_counted_suffix(self):
-        # fork → b1 → join → end
-        # fork → b2 → join
-        # Actual steps: fork(1) b1(1) b2(1) join(1) end(1) = 5
-        # Naive sum would give: 1 + (1+1+1) + (1+1+1) = 7
-        fork = ParallelGatewayNode("fork", "fork")
-        b1 = _task("b1")
-        b2 = _task("b2")
-        join = _and_join("join")
-        end = _end("e")
-        _connect(fork, b1)
-        _connect(fork, b2)
-        _connect(b1, join)
-        _connect(b2, join)
-        _connect(join, end)
-        assert _acyclic_depth(fork, frozenset()) == 5
-
-    def test_nested_and_forks(self):
-        # outer_fork → ob1 → outer_join → end
-        # outer_fork → inner_fork → ib1 → inner_join → outer_join
-        #              inner_fork → ib2 → inner_join
-        # Actual: outer_fork(1) ob1(1) inner_fork(1) ib1(1) ib2(1) inner_join(1) outer_join(1) end(1) = 8
-        outer_fork = ParallelGatewayNode("of", "of")
-        ob1 = _task("ob1")
-        inner_fork = ParallelGatewayNode("if_", "if_")
-        ib1 = _task("ib1")
-        ib2 = _task("ib2")
-        inner_join = _and_join("ij")
-        outer_join = _and_join("oj")
-        end = _end("e")
-        _connect(outer_fork, ob1)
-        _connect(outer_fork, inner_fork)
-        _connect(inner_fork, ib1)
-        _connect(inner_fork, ib2)
-        _connect(ib1, inner_join)
-        _connect(ib2, inner_join)
-        _connect(inner_join, outer_join)
-        _connect(ob1, outer_join)
-        _connect(outer_join, end)
-        assert _acyclic_depth(outer_fork, frozenset()) == 8
+def test_self_loop():
+    # A task that loops on itself is a loop body of one node: 1 + 2 + 1 = 4
+    g = Graph()
+    start, t, end = g.start(), g.task("t"), g.end("end")
+    g.link(start, t, end)
+    g.link(t, t)
+    assert compute_unwind_bound(g.bpmn()) == 5
 
 
-# ── _find_matching_join ────────────────────────────────────────────────────────
+def test_nested_loops_multiply():
+    # start -> outer -> inner -> work -> in_check -(back)-> inner
+    #                                   in_check -> out_check -(back)-> outer
+    #                                               out_check -> end
+    g = Graph()
+    start, end = g.start(), g.end("end")
+    outer, inner, work = g.xor("outer"), g.xor("inner"), g.task("work")
+    in_check, out_check = g.xor("in_check"), g.xor("out_check")
+    g.link(start, outer, inner, work, in_check, out_check, end)
+    g.link(in_check, inner)
+    g.link(out_check, outer)
+    # outer-only nodes (outer, out_check) run 2 times each = 4
+    # inner nodes (inner, work, in_check) run 2 * 2 = 4 times each = 12
+    # start + end = 2; total 18
+    assert compute_unwind_bound(g.bpmn()) == 19
 
 
-class TestFindMatchingJoin:
-    def test_two_branches_converge_at_join(self):
-        fork = ParallelGatewayNode("fork", "fork")
-        b1 = _task("b1")
-        b2 = _task("b2")
-        join = _and_join("join")
-        end = _end("e")
-        _connect(fork, b1)
-        _connect(fork, b2)
-        _connect(b1, join)
-        _connect(b2, join)
-        _connect(join, end)
-        result = _find_matching_join(fork, frozenset({"fork"}))
-        assert result is not None
-        assert result.id == "join"
-
-    def test_no_convergence_returns_none(self):
-        # fork → b1 → end1
-        # fork → b2 → end2   (branches never meet)
-        fork = ParallelGatewayNode("fork", "fork")
-        b1 = _task("b1")
-        b2 = _task("b2")
-        _connect(fork, b1)
-        _connect(fork, b2)
-        _connect(b1, _end("e1"))
-        _connect(b2, _end("e2"))
-        result = _find_matching_join(fork, frozenset({"fork"}))
-        assert result is None
-
-    def test_single_outflow_returns_none(self):
-        # A "fork" with only one outgoing flow is really sequential — no join needed.
-        fork = ParallelGatewayNode("fork", "fork")
-        task = _task("t")
-        _connect(fork, task)
-        result = _find_matching_join(fork, frozenset({"fork"}))
-        assert result is None
-
-    def test_join_blocked_by_path_returns_none(self):
-        # The matching join is already in the acyclic path (back-edge scenario).
-        fork = ParallelGatewayNode("fork", "fork")
-        b1 = _task("b1")
-        b2 = _task("b2")
-        join = _and_join("join")
-        _connect(fork, b1)
-        _connect(fork, b2)
-        _connect(b1, join)
-        _connect(b2, join)
-        # join is already in path — _find_matching_join should not return it
-        result = _find_matching_join(fork, frozenset({"fork", "join"}))
-        assert result is None
+def test_loop_containing_parallel_gateway():
+    g = Graph()
+    start, head, fork, join = g.start(), g.xor("head"), g.par("fork"), g.par("join")
+    a, b, check, end = g.task("a"), g.task("b"), g.xor("check"), g.end("end")
+    g.link(start, head, fork)
+    g.link(fork, a, join)
+    g.link(fork, b, join)
+    g.link(join, check)
+    g.link(check, head)
+    g.link(check, end)
+    # loop {head, fork, a, b, join, check} = 6 nodes * 2 = 12; start + end = 2
+    assert compute_unwind_bound(g.bpmn()) == 15
 
 
-# ── compute_bound with real fixtures ─────────────────────────────────────────
+def test_parallel_gateway_nested_in_exclusive_branch():
+    # The expensive branch holds a fork; the cheap branch is a single task
+    g = Graph()
+    start, gw, merge, end = g.start(), g.xor("gw"), g.xor("merge"), g.end("end")
+    fork, join = g.par("fork"), g.par("join")
+    a, b, cheap = g.task("a"), g.task("b"), g.task("cheap")
+    g.link(start, gw, fork)
+    g.link(fork, a, join)
+    g.link(fork, b, join)
+    g.link(join, merge)
+    g.link(gw, cheap, merge)
+    g.link(merge, end)
+    # start, gw, fork, a, b, join, merge, end = 8
+    assert compute_unwind_bound(g.bpmn()) == 9
 
 
-class TestComputeBoundSimpleExample:
-    @pytest.fixture(scope="class")
-    def bpmn(self):
-        return _load_bpmn(
-            RESOURCES / "simple_example" / "feel" / "state.txt",
-            RESOURCES / "simple_example" / "feel" / "simple_open.bpmn",
-        )
-
-    def test_bound_default_retries(self, bpmn):
-        # acyclic depth 4 + cycle(len=2) × 2 retries = 8
-        assert compute_bound(bpmn, max_retries=2) == 8
-
-    def test_bound_scales_with_retries(self, bpmn):
-        # acyclic 4 + cycle(2) × 4 = 12
-        assert compute_bound(bpmn, max_retries=4) == 12
-
-    def test_bound_minimum_is_acyclic_depth(self, bpmn):
-        # With max_retries=0, only the acyclic skeleton contributes.
-        assert compute_bound(bpmn, max_retries=0) == 4
+def test_nested_parallel_gateways():
+    g = Graph()
+    start, end = g.start(), g.end("end")
+    f1, j1, f2, j2 = g.par("f1"), g.par("j1"), g.par("f2"), g.par("j2")
+    a, b, c = g.task("a"), g.task("b"), g.task("c")
+    g.link(start, f1)
+    g.link(f1, a, j1)
+    g.link(f1, f2)
+    g.link(f2, b, j2)
+    g.link(f2, c, j2)
+    g.link(j2, j1)
+    g.link(j1, end)
+    # start, f1, a, f2, b, c, j2, j1, end = 9 (each join once)
+    assert compute_unwind_bound(g.bpmn()) == 10
 
 
-class TestComputeBoundFace2Face:
-    @pytest.fixture(scope="class")
-    def bpmn(self):
-        return _load_bpmn(
-            RESOURCES / "face2face" / "feel" / "state.txt",
-            RESOURCES / "face2face" / "feel" / "face2face_open.bpmn",
-        )
+def test_boundary_event_path_is_added():
+    g = Graph()
+    start, task, end = g.start(), g.task("t"), g.end("end")
+    boundary = Task.BoundaryEvent("b", "b", "", "", "t")
+    handler, end2 = g.task("h"), g.end("end2")
+    g.process["b"] = boundary
+    task.add_boundary_event(boundary)
+    g.link(start, task, end)
+    g.link(boundary, handler, end2)
+    # start, t, end + b, h, end2 = 6 (the event may fire as well as the task finishing)
+    assert compute_unwind_bound(g.bpmn()) == 7
 
-    def test_bound_default_retries(self, bpmn):
-        # acyclic 13 + loop total 12 = 25 (empirically verified minimum)
-        assert compute_bound(bpmn, max_retries=2) == 25
 
-    def test_bound_scales_with_retries(self, bpmn):
-        # acyclic 13 + loop total (2+4) × 3 = 13 + 18 = 31
-        assert compute_bound(bpmn, max_retries=3) == 31
+def test_processes_add_up():
+    # Pools run concurrently, so their steps interleave in one run: 3 + 4 = 7
+    g1 = Graph()
+    g1.process = Process("p1", "p1")
+    g1.link(g1.start(), g1.task("a"), g1.end("e"))
+    g2 = Graph()
+    g2.process = Process("p2", "p2")
+    g2.link(g2.start(), g2.task("a"), g2.task("b"), g2.end("e"))
+    assert compute_unwind_bound(g1.bpmn(g2)) == 8
 
-    def test_bound_minimum_is_acyclic_depth(self, bpmn):
-        assert compute_bound(bpmn, max_retries=0) == 13
+
+def test_unreachable_nodes_ignored():
+    g = Graph()
+    g.link(g.start(), g.end("end"))
+    g.task("orphan")
+    assert compute_unwind_bound(g.bpmn()) == 3

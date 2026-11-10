@@ -1,81 +1,102 @@
 import re
 import subprocess
 
-from returns.io import IOResult, IOSuccess, impure_safe
-from returns.result import Failure, Result, Success
+from returns.io import IOResult, impure_safe
+from returns.result import Result
 
 from bpmncwpverify.builder.cbmc_builder import CbmcBuilder
 from bpmncwpverify.core.bpmn import Bpmn
 from bpmncwpverify.core.cwp import Cwp
 from bpmncwpverify.core.error import (
     CbmcAssertionError,
-    CbmcReachabilityError,
-    CbmcSubProcessError,
+    CbmcRunError,
+    CbmcUnreachableStateError,
     Error,
 )
 from bpmncwpverify.core.state import State
 from bpmncwpverify.util.file import write_file_contents
 
-OUTPUT_FILE = "./tmp/verification.c"
+OUTPUT_FILE = "/tmp/verification.c"
+COVERAGE_OUTPUT_FILE = "/tmp/verification_cover.c"
+
+# CBMC exits with 0 when verification succeeds and 10 when a property fails.
+# Anything else (parse errors, usage errors, ...) means CBMC did not verify.
+_CBMC_EXIT_CODES = (0, 10)
 
 
 class CbmcVerificationReport:
-    __slots__ = [
-        "file_path",
-        "c_code",
-        "bound",
-        "correctness_output",
-        "reachability_output",
-    ]
+    __slots__ = ["file_path", "c_code", "cbmc_cli_args", "cbmc_report"]
 
     def __init__(
-        self,
-        file_path: str,
-        c_code: str,
-        bound: int,
-        correctness_output: str,
-        reachability_output: str,
+        self, file_path: str, c_code: str, cbmc_cli_args: list[str], cbmc_report: str
     ) -> None:
         self.file_path = file_path
         self.c_code = c_code
-        self.bound = bound
-        self.correctness_output = correctness_output
-        self.reachability_output = reachability_output
+        self.cbmc_cli_args = cbmc_cli_args
+        self.cbmc_report = cbmc_report
 
 
-class CbmcOutputParser:
-    def check_correctness(self, stdout: str) -> Result[None, Error]:
-        if "VERIFICATION SUCCESSFUL" in stdout:
-            return Success(None)
-        if "VERIFICATION FAILED" in stdout:
-            failures = re.findall(r"^\[.*?\].*?: FAILURE$", stdout, re.MULTILINE)
-            return Failure(CbmcAssertionError(failures))
-        return Failure(CbmcSubProcessError("cbmc"))
-
-    def check_reachability(self, stdout: str) -> Result[None, Error]:
-        goal_lines = re.findall(
-            r"^\[main\.coverage\.\d+\].*?: (SATISFIED|FAILED)$", stdout, re.MULTILINE
+def _run_cbmc(file_path: str, cli_args: list[str]) -> IOResult[str, Error]:
+    def cbmc() -> str:
+        completed = subprocess.run(
+            ["cbmc", file_path] + cli_args, capture_output=True, text=True
         )
-        if not goal_lines:
-            return Failure(CbmcSubProcessError("cbmc --cover"))
-        unsatisfied = [
-            line
-            for line in re.findall(r"^\[main\.coverage\.\d+\].*$", stdout, re.MULTILINE)
-            if line.endswith("FAILED")
-        ]
-        if unsatisfied:
-            return Failure(CbmcReachabilityError(unsatisfied))
-        return Success(None)
+        if completed.returncode not in _CBMC_EXIT_CODES:
+            raise RuntimeError(
+                f"exit code {completed.returncode}: "
+                f"{(completed.stdout + completed.stderr).strip()}"
+            )
+        return completed.stdout
+
+    return impure_safe(cbmc)().alt(lambda exc: CbmcRunError(str(exc)))
 
 
-def _run_cbmc(args: list[str]) -> IOResult[str, Error]:
-    cmd = args[0]
+_PROPERTY_RE = re.compile(
+    r"^\[(?P<property>[^\]]+)\] line (?P<line>\d+) (?P<description>.*): FAILURE$",
+    re.MULTILINE,
+)
+_ASSERTION_RE = re.compile(r"^assertion (?P<assertion>.*?)(?: && \"(?P<msg>.*)\")?$")
+_COVERAGE_RE = re.compile(
+    r"^\[[^\]]+\] file \S+ line \d+ function \w+ condition '(?P<state>\w+) != FALSE': FAILED$",
+    re.MULTILINE,
+)
 
-    def _subprocess() -> str:
-        result = subprocess.run(args, capture_output=True, text=True)
-        return result.stdout + result.stderr
 
-    return impure_safe(_subprocess)().alt(lambda _: CbmcSubProcessError(cmd))
+def _check_assertions(cbmc_report: str) -> Result[None, Error]:
+    failures: list[dict[str, str]] = []
+    for match in _PROPERTY_RE.finditer(cbmc_report):
+        description = match["description"]
+        assertion = _ASSERTION_RE.match(description)
+        failures.append(
+            {
+                "property": match["property"],
+                "function": match["property"].split(".")[0],
+                "line": match["line"],
+                "assertion": (assertion["msg"] or assertion["assertion"])
+                if assertion
+                else description,
+            }
+        )
+    return (
+        Result.from_failure(CbmcAssertionError(failures))
+        if failures
+        else Result.from_value(None)
+    )
+
+
+def _check_coverage(cbmc_report: str, cwp: Cwp) -> Result[None, Error]:
+    # The start state holds before the first update, so it needs no cover.
+    start = cwp.start_state.name if cwp.start_state else None
+    unreached = [
+        match["state"]
+        for match in _COVERAGE_RE.finditer(cbmc_report)
+        if match["state"] != start
+    ]
+    return (
+        Result.from_failure(CbmcUnreachableStateError(unreached))
+        if unreached
+        else Result.from_value(None)
+    )
 
 
 def verify_with_cbmc(
@@ -84,48 +105,51 @@ def verify_with_cbmc(
     bpmn: Bpmn,
 ) -> IOResult[CbmcVerificationReport, Error]:
     builder = CbmcBuilder().with_state(state).with_cwp(cwp).with_bpmn(bpmn)
-    build_result = builder.build()
-    bound = builder.last_bound
+    c_result: Result[str, Error] = builder.build()
+    bound_result: Result[int, Error] = builder.unwind_bound()
+    coverage_result: Result[str, Error] = builder.with_state_coverage(True).build()
 
-    parser = CbmcOutputParser()
-    unwind = str(bound + 1)
+    def run(
+        c_code: str, bound: int, coverage_c: str
+    ) -> IOResult[CbmcVerificationReport, Error]:
+        unwind = str(bound)
+        assert_args = ["--unwind", unwind, "--unwinding-assertions"]
+        cover_args = ["--unwind", unwind, "--cover", "cover"]
 
-    result: IOResult[CbmcVerificationReport, Error] = IOResult.from_result(
-        build_result
-    ).bind(  # pyright: ignore[reportUnknownMemberType]
-        lambda c_code: write_file_contents(c_code, OUTPUT_FILE).bind(  # pyright: ignore[reportUnknownMemberType]
-            lambda _: _run_cbmc(["cbmc", OUTPUT_FILE, "--unwind", unwind]).bind(  # pyright: ignore[reportUnknownMemberType]
-                lambda correctness_out: IOResult.from_result(
-                    parser.check_correctness(correctness_out)
-                ).bind(  # pyright: ignore[reportUnknownMemberType]
-                    lambda _: _run_cbmc(
-                        [
-                            "cbmc",
+        def check_reachability(
+            report: str,
+        ) -> IOResult[CbmcVerificationReport, Error]:
+            return (
+                write_file_contents(coverage_c, COVERAGE_OUTPUT_FILE)
+                .bind(lambda _: _run_cbmc(COVERAGE_OUTPUT_FILE, cover_args))  # pyright: ignore[reportUnknownMemberType]
+                .bind(  # pyright: ignore[reportUnknownMemberType]
+                    lambda cover_report: IOResult.from_result(
+                        _check_coverage(cover_report, cwp)
+                    ).map(
+                        lambda _: CbmcVerificationReport(
                             OUTPUT_FILE,
-                            "--unwind",
-                            unwind,
-                            "--cover",
-                            "cover",
-                            "-DREACHABILITY",
-                        ]
-                    ).bind(  # pyright: ignore[reportUnknownMemberType]
-                        lambda reachability_out: IOResult.from_result(
-                            parser.check_reachability(reachability_out)
-                        ).bind(  # pyright: ignore[reportUnknownMemberType]
-                            lambda _: IOSuccess(
-                                CbmcVerificationReport(
-                                    file_path=OUTPUT_FILE,
-                                    c_code=c_code,
-                                    bound=bound,
-                                    correctness_output=correctness_out,
-                                    reachability_output=reachability_out,
-                                )
-                            )
+                            c_code,
+                            assert_args,
+                            report + "\n" + cover_report,
                         )
                     )
                 )
             )
+
+        return (
+            write_file_contents(c_code, OUTPUT_FILE)
+            .bind(lambda _: _run_cbmc(OUTPUT_FILE, assert_args))  # pyright: ignore[reportUnknownMemberType]
+            .bind(  # pyright: ignore[reportUnknownMemberType]
+                lambda report: IOResult.from_result(_check_assertions(report)).bind(  # pyright: ignore[reportUnknownMemberType]
+                    lambda _: check_reachability(report)
+                )
+            )
+        )
+
+    return IOResult.from_result(c_result).bind(  # pyright: ignore[reportUnknownMemberType]
+        lambda c_code: IOResult.from_result(bound_result).bind(  # pyright: ignore[reportUnknownMemberType]
+            lambda bound: IOResult.from_result(coverage_result).bind(  # pyright: ignore[reportUnknownMemberType]
+                lambda coverage_c: run(c_code, bound, coverage_c)
+            )
         )
     )
-
-    return result

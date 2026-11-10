@@ -1,146 +1,126 @@
-"""
-cbmc_builder.py — Top-level builder for CBMC C file generation.
+import re
 
-Mirrors PromelaBuilder: three with_*() setters, one build() → Result[str, Error].
-
-The generated C file has this structure:
-  1. File header
-  2. #include <stdbool.h>, nondet_int() declaration
-  3. State #defines (consts, enum values)
-  4. BOUND #define
-  5. CWP state #defines  (from CwpCbmcVisitor)
-  6. Transition #defines (from BpmnCbmcVisitor)
-  7. update_cwp_state()  (from CwpCbmcVisitor)
-  8. int main()          (from BpmnCbmcVisitor)
-"""
-
-from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
-from bpmncwpverify.builder.cbmc_bound import compute_bound
+from bpmncwpverify.builder.cbmc_bound import compute_unwind_bound
 from bpmncwpverify.core.bpmn import Bpmn
 from bpmncwpverify.core.cwp import Cwp
-from bpmncwpverify.core.error import CbmcGeneratorError, Error, NotInitializedError
+from bpmncwpverify.core.error import CbmcBuildError, Error, NotInitializedError
 from bpmncwpverify.core.state import State
-from bpmncwpverify.visitors.bpmn_cbmc_visitor import BpmnCbmcVisitor
+from bpmncwpverify.util.stringmanager import NL_SINGLE, IndentAction, StringManager
+from bpmncwpverify.visitors.bpmn_cbmc_visitor import CbmcBpmnGenVisitor
 from bpmncwpverify.visitors.cwp_cbmc_visitor import CwpCbmcVisitor
 
-# ── State-to-C helpers ────────────────────────────────────────────────────────
+UNWIND_MACRO = "UNWIND_BOUND"
+
+_C_TYPES = {
+    "bit": "unsigned char",
+    "bool": "bool",
+    "byte": "unsigned char",
+    "short": "short",
+    "int": "int",
+}
 
 
-def _state_defines(state: State) -> str:
+def _c_type(state: State, type_: str) -> str:
+    if type_ in {enum.id for enum in state.enums}:
+        return f"enum {type_}"
+    return _C_TYPES.get(type_, type_)
+
+
+def _generate_state_c(state: State) -> str:
+    str_builder: list[str] = ["//**********VARIABLE DECLARATION************//"]
+    for const_decl in state.consts:
+        str_builder.append(f"#define {const_decl.id} {const_decl.init.value}")
+    for enum_decl in state.enums:
+        values = ", ".join(value.value for value in enum_decl.values)
+        str_builder.append(f"enum {enum_decl.id} {{ {values} }};")
+    for var_decl in state.vars:
+        str_builder.append(
+            f"{_c_type(state, var_decl.type_)} {var_decl.id} = {var_decl.init.value};"
+        )
+    return "\n".join(str_builder) + "\n\n"
+
+
+def _generate_main(process_ids: list[str]) -> str:
     """
-    Emit C #define lines for consts and enum values.
-
-    Consts:     #define <id>  <init_value>
-    Enum vals:  #define <value>  N   (sequential per enum, 0-based)
+    A run initialises every process, then repeatedly lets one process, chosen
+    nondeterministically, take a step, until nothing can move or the bound is
+    reached. Nothing here loops over the processes, so `--unwind` only has to
+    cover the outer loop.
     """
-    lines: list[str] = []
-    for const in state.consts:
-        lines.append(f"#define {const.id:<28} {const.init.value}")
-    for enum in state.enums:
-        for i, val in enumerate(enum.values):
-            lines.append(f"#define {val.value:<28} {i}")
-    return "\n".join(lines) + "\n" if lines else ""
+    main = StringManager()
+    count = len(process_ids)
+    main.write_str("static bool step_any_process(void) {", NL_SINGLE, IndentAction.INC)
+    main.write_str(f"switch (nondet_uint() % {count}u) {{", NL_SINGLE)
+    for first in range(count):
+        order = process_ids[first:] + process_ids[:first]
+        calls = " || ".join(f"{pid}_step()" for pid in order)
+        main.write_str(f"case {first}u: return {calls};", NL_SINGLE)
+    main.write_str("default: return false;", NL_SINGLE)
+    main.write_str("}", NL_SINGLE)
+    main.write_str("}", NL_SINGLE, IndentAction.DEC)
+    main.write_str("", NL_SINGLE)
+    main.write_str("int main(void) {", NL_SINGLE, IndentAction.INC)
+    for pid in process_ids:
+        main.write_str(f"{pid}_init();", NL_SINGLE)
+    main.write_str(
+        f"for (unsigned int i = 0; i + 1 < {UNWIND_MACRO}; i++) {{",
+        NL_SINGLE,
+        IndentAction.INC,
+    )
+    main.write_str("if (!step_any_process()) break;", NL_SINGLE)
+    main.write_str("}", NL_SINGLE, IndentAction.DEC)
+    main.write_str("return 0;", NL_SINGLE)
+    main.write_str("}", NL_SINGLE, IndentAction.DEC)
+    return str(main)
 
 
-def _var_decls(state: State) -> list[str]:
+_STATE_ASSIGN = re.compile(r"^(\t+)(\w+) = \2_prime;$", re.MULTILINE)
+
+
+def _add_state_coverage(cwp_c: str) -> str:
     """
-    C variable declarations for main() — bare-bones: all as int.
-    e.g. ["int x = 0;"] or ["int terms = TERMS_PENDING;"]
+    Marks every point where `updateState` makes a CWP state active with a
+    `__CPROVER_cover`, so a run with `--cover cover` shows which states are
+    never entered.
     """
-    decls: list[str] = []
-    enum_ids = {e.id for e in state.enums}
-    for var in state.vars:
-        # bare bones: always declare as int regardless of type_
-        _ = enum_ids  # noted: ignored in this bare-bones version
-        decls.append(f"int {var.id} = {var.init.value};")
-    return decls
-
-
-def _var_params(state: State) -> list[str]:
-    """
-    C parameter declarations for update_cwp_state() — bare-bones: all int.
-    e.g. ["int x"] or ["int terms", "int paymentOffered", ...]
-    """
-    return [f"int {var.id}" for var in state.vars]
-
-
-def _var_args(state: State) -> list[str]:
-    """
-    Call arguments for update_cwp_state() — just variable names.
-    e.g. ["x"] or ["terms", "paymentOffered", ...]
-    """
-    return [var.id for var in state.vars]
-
-
-# ── C file assembly ────────────────────────────────────────────────────────────
+    return _STATE_ASSIGN.sub(r"\g<0>\n\1__CPROVER_cover(\2);", cwp_c)
 
 
 def _generate_c(
-    state: State, cwp: Cwp, bpmn: Bpmn, max_retries: int
-) -> Result[tuple[str, int], Error]:
-    # ── Run CWP visitor ──
+    state: State, cwp: Cwp, bpmn: Bpmn, state_coverage: bool = False
+) -> Result[str, Error]:
+    if not bpmn.processes:
+        return Failure(CbmcBuildError("the BPMN has no processes"))
+
+    bpmn_visitor = CbmcBpmnGenVisitor()
+    bpmn.accept(bpmn_visitor)
+    bpmn_c: Result[str, Error] = bpmn_visitor.result()
+    if isinstance(bpmn_c, Failure):
+        return bpmn_c
+
     cwp_visitor = CwpCbmcVisitor()
     cwp.accept(cwp_visitor)
+    cwp_c = str(cwp_visitor)
+    if state_coverage:
+        cwp_c = _add_state_coverage(cwp_c)
 
-    # ── Run BPMN visitor ──
-    bpmn_visitor = BpmnCbmcVisitor()
-    bpmn.accept(bpmn_visitor)
-
-    if bpmn_visitor.error is not None:
-        return Failure(bpmn_visitor.error)
-
-    if bpmn_visitor.num_transitions == 0:
-        return Failure(CbmcGeneratorError("BPMN produced no transitions"))
-
-    # ── Derived values ──
-    bound = compute_bound(bpmn, max_retries)
-    st_defines = _state_defines(state)
-    v_decls = _var_decls(state)
-    v_params = _var_params(state)
-    v_args = _var_args(state)
-
-    cwp_define_names = cwp_visitor.reachable_state_define_names()
-
-    # ── Assemble ──
-    sections: list[str] = []
-
-    sections.append(
-        "/* Auto-generated by cbmc_builder.py — do not edit by hand. */\n"
-        "#include <stdbool.h>\n"
-        "\n"
-        "int nondet_int();\n"
+    bound = compute_unwind_bound(bpmn)
+    header = f"#include <assert.h>\n#include <stdbool.h>\n\n#define {UNWIND_MACRO} {bound}\n\n"
+    return Success(
+        f"{header}{_generate_state_c(state)}{cwp_c}{bpmn_c.unwrap()}"
+        f"{_generate_main(bpmn_visitor.process_ids)}"
     )
-
-    if st_defines:
-        sections.append(st_defines)
-
-    sections.append(f"#define {'BOUND':<28} {bound}\n")
-
-    sections.append(cwp_visitor.generate_state_defines())
-
-    sections.append(bpmn_visitor.generate_transition_defines())
-
-    sections.append(cwp_visitor.generate_update_cwp_state(v_params))
-
-    sections.append(
-        bpmn_visitor.generate_main(
-            var_decls=v_decls,
-            var_args=v_args,
-            cwp_num_states_define="CWP_NUM_STATES",
-            cwp_state_define_names=cwp_define_names,
-        )
-    )
-
-    return Success(("\n".join(sections), bound))
-
-
-# ── Builder class ──────────────────────────────────────────────────────────────
 
 
 class CbmcBuilder:
-    __slots__ = ["bpmn", "cwp", "state", "max_retries", "last_bound"]
+    __slots__ = [
+        "bpmn",
+        "cwp",
+        "state",
+        "state_coverage",
+    ]
 
     def __init__(self) -> None:
         self.bpmn: Result[Bpmn, Error] = Failure(
@@ -150,8 +130,25 @@ class CbmcBuilder:
         self.state: Result[State, Error] = Failure(
             NotInitializedError("CbmcBuilder.state")
         )
-        self.max_retries: int = 2
-        self.last_bound: int = 0
+        self.state_coverage: bool = False
+
+    def build(self) -> Result[str, Error]:
+        result: Result[str, Error] = self.state.bind(  # pyright: ignore[reportUnknownMemberType]
+            lambda state: self.cwp.bind(  # pyright: ignore[reportUnknownMemberType]
+                lambda cwp: self.bpmn.bind(  # pyright: ignore[reportUnknownMemberType]
+                    lambda bpmn: _generate_c(state, cwp, bpmn, self.state_coverage)
+                )
+            )
+        )
+        return result
+
+    def unwind_bound(self) -> Result[int, Error]:
+        """
+        The `--unwind` value to pass to CBMC for the program `build()` makes.
+        It is also defined in that program as `UNWIND_BOUND`.
+        """
+        result: Result[int, Error] = self.bpmn.map(compute_unwind_bound)
+        return result
 
     def with_bpmn(self, bpmn: Bpmn) -> "CbmcBuilder":
         self.bpmn = Success(bpmn)
@@ -165,22 +162,6 @@ class CbmcBuilder:
         self.state = Success(state)
         return self
 
-    def with_max_retries(self, max_retries: int) -> "CbmcBuilder":
-        self.max_retries = max_retries
+    def with_state_coverage(self, state_coverage: bool) -> "CbmcBuilder":
+        self.state_coverage = state_coverage
         return self
-
-    def build(self) -> Result[str, Error]:
-        max_retries = self.max_retries
-        self.last_bound = 0
-        inner: Result[tuple[str, int], Error] = self.state.bind(  # pyright: ignore[reportUnknownMemberType]
-            lambda state: self.cwp.bind(  # pyright: ignore[reportUnknownMemberType]
-                lambda cwp: self.bpmn.bind(  # pyright: ignore[reportUnknownMemberType]
-                    lambda bpmn: _generate_c(state, cwp, bpmn, max_retries)
-                )
-            )
-        )
-        if is_successful(inner):
-            c_code, bound = inner.unwrap()
-            self.last_bound = bound
-            return Success(c_code)
-        return Failure(inner.failure())

@@ -1,6 +1,5 @@
 # TODO: create a "match" function on Failure(Error) and create standard error messaging.
 import builtins
-import re
 import typing
 from xml.etree.ElementTree import Element
 
@@ -11,21 +10,6 @@ from returns.maybe import Maybe, Nothing
 class Error:
     def __init__(self) -> None:
         pass
-
-
-class ErrorException(Exception):
-    __slots__ = ["error"]
-
-    def __init__(self, error: Error) -> None:
-        self.error = error
-
-
-class BpmnUnsupportedStartEvent(Error):
-    __slots__ = ["id"]
-
-    def __init__(self, id: str) -> None:
-        super().__init__()
-        self.id = id
 
 
 class BpmnNoElementNameError(Error):
@@ -223,6 +207,47 @@ class BpmnUnrecognizedElement(Error):
         self.element_name = element_name
 
 
+class BpmnCbmcUnsupportedElementError(Error):
+    __slots__ = ["element_id", "reason"]
+
+    def __init__(self, element_id: str, reason: str) -> None:
+        super().__init__()
+        self.element_id = element_id
+        self.reason = reason
+
+
+class CbmcBuildError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class CbmcAssertionError(Error):
+    __slots__ = ["failures"]
+
+    def __init__(self, failures: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.failures = failures
+
+
+class CbmcRunError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class CbmcUnreachableStateError(Error):
+    __slots__ = ["states"]
+
+    def __init__(self, states: list[str]) -> None:
+        super().__init__()
+        self.states = states
+
+
 class CwpEdgeNoParentExprError(Error):
     __slots__ = ["edge"]
 
@@ -302,15 +327,15 @@ class ExpressionComputationCompatabilityError(Error):
 
 
 class ExpressionNegatorError(Error):
-    __slots__ = ["type"]
+    __slots__ = ["_type"]
 
     def __init__(self, type: str) -> None:
         super().__init__()
-        self.type = type
+        self._type = type
 
     def __eq__(self, other: typing.Any) -> bool:
         if isinstance(other, ExpressionNegatorError):
-            return self.type == other.type
+            return self._type == other._type
         return False
 
 
@@ -336,74 +361,30 @@ class ExpressionRelationCompatabilityError(Error):
         return False
 
 
-class ExpressionIfBranchCompatabilityError(Error):
-    __slots__ = ["thentype", "elsetype"]
-
-    def __init__(self, thentype: str, elsetype: str) -> None:
-        super().__init__()
-        self.thentype = thentype
-        self.elsetype = elsetype
-
-
-class ExpressionIfConditionError(Error):
-    __slots__ = ["type"]
-
-    def __init__(self, type: str) -> None:
-        super().__init__()
-        self.type = type
-
-
-class ExpressionLogicalCompatibilityError(Error):
-    __slots__ = ["ltype", "rtype"]
-
-    def __init__(self, ltype: str, rtype: str) -> None:
-        super().__init__()
-        self.ltype = ltype
-        self.rtype = rtype
-
-    def __eq__(self, other: typing.Any) -> bool:
-        if isinstance(other, ExpressionComputationCompatabilityError):
-            return self.ltype == other.ltype and self.rtype == other.rtype
-        return False
-
-
 class ExpressionRelationalNotError(Error):
-    __slots__ = ["type"]
+    __slots__ = ["_type"]
 
     def __init__(self, type: str) -> None:
         super().__init__()
-        self.type = type
+        self._type = type
 
     def __eq__(self, other: typing.Any) -> bool:
         if isinstance(other, ExpressionRelationalNotError):
-            return self.type == other.type
+            return self._type == other._type
         return False
 
 
 class ExpressionUnrecognizedID(Error):
-    __slots__ = ["id"]
+    __slots__ = ["_id"]
 
     def __init__(self, id: str) -> None:
         super().__init__()
-        self.id = id
+        self._id = id
 
     def __eq__(self, other: typing.Any) -> bool:
         if isinstance(other, ExpressionUnrecognizedID):
-            return self.id == other.id
+            return self._id == other._id
         return False
-
-
-class ExpressionOutOfScope(Error):
-    __slots__ = ["id"]
-
-    def __init__(self, id: str) -> None:
-        super().__init__()
-        self.id = id
-
-
-class ExpressionTripleInputError(Error):
-    def __init__(self) -> None:
-        super().__init__()
 
 
 class FileReadFileError(Error):
@@ -428,6 +409,82 @@ class FileXmlParseError(Error):
     def __init__(self, msg: str):
         super().__init__()
         self.msg = msg
+
+
+class FeelParseError(Error):
+    __slots__ = ["exception_str"]
+
+    def __init__(self, exception_str: str) -> None:
+        super().__init__()
+        self.exception_str = exception_str
+
+
+class FeelUnsupportedError(Error):
+    __slots__ = ["construct", "text"]
+
+    def __init__(self, construct: str, text: str) -> None:
+        super().__init__()
+        self.construct = construct
+        self.text = text
+
+
+class FeelUnknownNameError(Error):
+    __slots__ = ["name"]
+
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.name = name
+
+
+class FeelNotAValueError(Error):
+    __slots__ = ["name"]
+
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.name = name
+
+
+class FeelOperatorTypeError(Error):
+    __slots__ = ["op", "operand_types"]
+
+    def __init__(self, op: str, operand_types: tuple[str, ...]) -> None:
+        super().__init__()
+        self.op = op
+        self.operand_types = operand_types
+
+
+class FeelConditionTypeError(Error):
+    __slots__ = ["expr_type"]
+
+    def __init__(self, expr_type: str) -> None:
+        super().__init__()
+        self.expr_type = expr_type
+
+
+class FeelListTypeError(Error):
+    __slots__ = ["construct", "detail"]
+
+    def __init__(self, construct: str, detail: str) -> None:
+        super().__init__()
+        self.construct = construct
+        self.detail = detail
+
+
+class FeelAssignTargetError(Error):
+    __slots__ = ["name"]
+
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.name = name
+
+
+class FeelCbmcUnsupportedError(Error):
+    __slots__ = ["construct", "reason"]
+
+    def __init__(self, construct: str, reason: str) -> None:
+        super().__init__()
+        self.construct = construct
+        self.reason = reason
 
 
 class FlowExpressionError(Error):
@@ -605,43 +662,6 @@ class StateMultipleDefinitionError(Error):
         return False
 
 
-class StateArraySizeError(Error):
-    __slots__ = ["id", "line", "column", "expected_size", "actual_size"]
-
-    def __init__(
-        self,
-        id: str,
-        line: Maybe[int],
-        column: Maybe[int],
-        expected_size: int,
-        actual_size: int,
-    ) -> None:
-        super().__init__()
-        self.id = id
-        self.line = line
-        self.column = column
-        self.expected_size = expected_size
-        self.actual_size = actual_size
-
-    def __eq__(self, other: typing.Any) -> bool:
-        if isinstance(other, StateArraySizeError):
-            return (
-                self.id == other.id
-                and self.line == other.line
-                and self.column == other.column
-                and self.expected_size == other.expected_size
-                and self.actual_size == other.actual_size
-            )
-        return False
-
-    def __str__(self) -> str:
-        return (
-            f"StateArraySizeError: Array '{self.id}' has size {self.actual_size}, "
-            f"but expected size is {self.expected_size}. "
-            f"Location: line {self.line}, column {self.column}."
-        )
-
-
 class StateSyntaxError(Error):
     __slots__ = "msg"
 
@@ -656,47 +676,6 @@ class StateAntlrWalkerError(Error):
     def __init__(self, msg: str) -> None:
         self.msg = msg
         super().__init__()
-
-
-class CbmcUnsupportedElementError(Error):
-    __slots__ = ["element_id", "element_type"]
-
-    def __init__(self, element_id: str, element_type: str) -> None:
-        super().__init__()
-        self.element_id = element_id
-        self.element_type = element_type
-
-
-class CbmcGeneratorError(Error):
-    __slots__ = ["msg"]
-
-    def __init__(self, msg: str) -> None:
-        super().__init__()
-        self.msg = msg
-
-
-class CbmcAssertionError(Error):
-    __slots__ = ["failures"]
-
-    def __init__(self, failures: list[str]) -> None:
-        super().__init__()
-        self.failures = failures
-
-
-class CbmcReachabilityError(Error):
-    __slots__ = ["unsatisfied_goals"]
-
-    def __init__(self, unsatisfied_goals: list[str]) -> None:
-        super().__init__()
-        self.unsatisfied_goals = unsatisfied_goals
-
-
-class CbmcSubProcessError(Error):
-    __slots__ = ["command"]
-
-    def __init__(self, command: str) -> None:
-        super().__init__()
-        self.command = command
 
 
 class SubProcessRunError(Error):
@@ -719,28 +698,6 @@ class TypingAssignCompatabilityError(Error):
         if isinstance(other, TypingAssignCompatabilityError):
             return self.ltype == other.ltype and self.rtype == other.rtype
         return False
-
-
-class TypingTripleVariableError(Error):
-    __slots__ = ["id"]
-
-    def __init__(self, id: str) -> None:
-        super().__init__()
-        self.id = id
-
-
-class TypingListCompatibiltiyError(Error):
-    __slots__ = ["first_type", "second_type"]
-
-    def __init__(self, first_type: str, second_type: str) -> None:
-        super().__init__()
-        self.first_type = first_type
-        self.second_type = second_type
-
-
-class TypingListOfExpressionsError(Error):
-    def __init__(self) -> None:
-        super().__init__()
 
 
 class TypingNegateBoolError(Error):
@@ -772,22 +729,12 @@ class TypingNotNonBoolError(Error):
         self.expr_type = expr_type
 
 
-class TypingNotCaughtError(Error):
-    __slpts__ = ["explination"]
-
-    def __init__(self, explination: str) -> None:
-        super().__init__()
-        self.explination = explination
-
-
 def get_error_message(error: Error) -> str:
     match error:
         case BpmnNoElementNameError(ids=ids):
             return (
                 f"Bpmn error: {ids} must have a name that is different from their ID."
             )
-        case BpmnUnsupportedStartEvent(id=id):
-            return f"Bpmn error: {id} is not a supported start event"
         case BpmnNoSwimLaneNameError(ids=ids):
             return f"Bpmn error: {ids} must have a swimlane with a name that is different from their ID"
         case BpmnFlowIncomingError(node_id=node_id):
@@ -832,6 +779,22 @@ def get_error_message(error: Error) -> str:
             return f"BPMN ERROR at node: {node_id}. {error_msg}"
         case BpmnTaskFlowError(task_id=task_id):
             return f"Task flow error: Task '{task_id}' should have at least one incoming and one outgoing flow."
+        case BpmnCbmcUnsupportedElementError(element_id=element_id, reason=reason):
+            return (
+                f"BPMN ERROR: element '{element_id}' cannot be expressed in C: {reason}"
+            )
+        case CbmcBuildError(reason=reason):
+            return f"CBMC ERROR: unable to build C program: {reason}"
+        case CbmcAssertionError(failures=failures):
+            details = "; ".join(
+                f"{f['assertion']} (line {f['line']}, {f['function']})"
+                for f in failures
+            )
+            return f"CBMC ERROR: assertion failed: {details}"
+        case CbmcRunError(reason=reason):
+            return f"CBMC ERROR: unable to run cbmc: {reason}"
+        case CbmcUnreachableStateError(states=states):
+            return f"CBMC ERROR: CWP state(s) never reached by the workflow: {', '.join(states)}"
         case BpmnUnrecognizedElement(element_name=element_name):
             return f"BPMN ERROR: Unrecognized bpmn element type in workflow: {element_name}"
         case CwpEdgeNoParentExprError(edge=edge):
@@ -855,33 +818,43 @@ def get_error_message(error: Error) -> str:
         case CwpNoStartStateError():
             return "CWP ERROR: No start states found."
         case ExpressionComputationCompatabilityError(ltype=ltype, rtype=rtype):
-            return f"EXPR ERROR: something of type '{rtype}' cannot be computed with something of type '{ltype}'"
-        case ExpressionNegatorError(type=type):
-            return f"EXPR ERROR: sometiong of type '{type}' cannot be used with a mathmatical negator"
+            return f"EXPR ERROR: sometion of type '{rtype}' cannot be computed with something of type '{ltype}'"
+        case ExpressionNegatorError(_type=_type):
+            return f"EXPR ERROR: sometiong of type '{_type}' cannot be used with a mathmatical negator"
         case ExpressionParseError(exception_str=exception_str):
             return f"Error while parsing expression: {exception_str}"
         case ExpressionRelationCompatabilityError(ltype=ltype, rtype=rtype):
-            return f"EXPR ERROR: something of type '{rtype}' cannot be related with something of type '{ltype}'"
-        case ExpressionIfBranchCompatabilityError(thentype=thentype, elsetype=elsetype):
-            return f"EXPR ERROR: if must have same or compatible return types on branchs,'{thentype}' and '{elsetype}' are not compatible"
-        case ExpressionIfConditionError(type=type):
-            return f"EXPR ERROR: if statement must have a conditional expression result in a bool, not a '{type}'"
-        case ExpressionLogicalCompatibilityError(ltype=ltype, rtype=rtype):
-            return f"EXPR ERROR: cannot perform logical operation on types '{ltype}' and '{rtype}'"
-        case ExpressionRelationalNotError(type=type):
-            return f"EXPR ERROR: something of type '{type}' cannot be used with a relational not"
-        case ExpressionUnrecognizedID(id=id):
-            return f"EXPR ERROR: '{id}' is not recognized as a literal or something stored in the symbol table"
-        case ExpressionOutOfScope(id=id):
-            return f"EXPR ERROR: '{id}' is out of scope"
-        case ExpressionTripleInputError():
-            return "EXPR ERROR: input in triple is not valid and can only be a list of varibles"
+            return f"EXPR ERROR: sometion of type '{rtype}' cannot be related with something of type '{ltype}'"
+        case ExpressionRelationalNotError(_type=_type):
+            return f"EXPR ERROR: sometiong of type '{_type}' cannot be used with a relational not"
+        case ExpressionUnrecognizedID(_id=_id):
+            return f"EXPR ERROR: '{_id}' is not recognized as a literal or something stored in the symbol table"
         case FileReadFileError(msg=msg):
             return f"FILE ERROR: '{msg}'"
         case FileWriteFileError(msg=msg):
             return f"FILE ERROR: '{msg}'"
         case FileXmlParseError(msg=msg):
             return f"FILE ERROR: '{msg}'"
+        case FeelParseError(exception_str=exception_str):
+            return f"FEEL syntax error: {exception_str}"
+        case FeelUnsupportedError(construct=construct, text=text):
+            return (
+                f"FEEL error: {construct} is not supported by this tool (in '{text}')"
+            )
+        case FeelUnknownNameError(name=name):
+            return f"FEEL TYPING ERROR: '{name}' is not a variable, constant or enum value in the state"
+        case FeelNotAValueError(name=name):
+            return f"FEEL TYPING ERROR: '{name}' is an enum type, not a value"
+        case FeelOperatorTypeError(op=op, operand_types=operand_types):
+            return f"FEEL TYPING ERROR: '{op}' cannot be applied to operands of type {', '.join(repr(t) for t in operand_types)}"
+        case FeelConditionTypeError(expr_type=expr_type):
+            return f"FEEL TYPING ERROR: a condition must be a bool, but this is of type '{expr_type}'"
+        case FeelListTypeError(construct=construct, detail=detail):
+            return f"FEEL TYPING ERROR: in {construct}: {detail}"
+        case FeelAssignTargetError(name=name):
+            return f"FEEL TYPING ERROR: '{name}' cannot be assigned to; only state variables can"
+        case FeelCbmcUnsupportedError(construct=construct, reason=reason):
+            return f"FEEL ERROR: {construct} cannot be expressed in C: {reason}"
         case FlowExpressionError(
             flow_id=flow_id, expression=expression, exception_str=exception_str
         ):
@@ -916,22 +889,18 @@ def get_error_message(error: Error) -> str:
             errors.append(counter_example)
             return "\n".join(errors)
         case SpinCoverageError(coverage_errors=coverage_errors):
-            return "Spin Coverage Error:\n" + "\n".join(
+            return "\n".join(
                 [
                     f"Proctype: {error['proctype']}, File: {error['file']}, Line: {str(error['line'])}, Message: {error['message']}"
                     for error in coverage_errors
                 ]
             )
-        case SpinInvalidEndStateError(
-            counter_example=counter_example, list_of_error_maps=list_of_error_maps
-        ):
+        case SpinInvalidEndStateError(list_of_error_maps=list_of_error_maps):
             errors = []
             errors.append("Invalid end state")
             errors.append(f"{len(list_of_error_maps)} error(s) occurred:")
             for idx, map in enumerate(list_of_error_maps):
                 errors.append(f"{idx + 1}: {map['info']}")
-
-            errors.append(counter_example)
             return "\n".join(errors)
         case SpinSyntaxError(list_of_error_maps=list_of_error_maps):
             errors = []
@@ -967,77 +936,12 @@ def get_error_message(error: Error) -> str:
             return f"STATE ERROR: multiple definition of '{id}'{location_first}{location_second}"
         case StateSyntaxError(msg=msg):
             return f"STATE SYNTAX ERROR: {msg}"
-        case CbmcUnsupportedElementError(
-            element_id=element_id, element_type=element_type
-        ):
-            return f"CBMC ERROR: unsupported element type '{element_type}' (id: {element_id})"
-        case CbmcGeneratorError(msg=msg):
-            return f"CBMC GENERATOR ERROR: {msg}"
-        case CbmcAssertionError(failures=failures):
-            lines = ["CBMC CORRECTNESS FAILURE (P1-P3):"]
-            lines.append(f"  {len(failures)} failing assertion(s):")
-            for i, raw in enumerate(failures, 1):
-                m = re.search(r"\] line (\d+) (.*): FAILURE$", raw)
-                if m:
-                    lines.append(f"  {i}. line {m.group(1)}: {m.group(2)}")
-                else:
-                    lines.append(f"  {i}. {raw}")
-            return "\n".join(lines)
-        case CbmcReachabilityError(unsatisfied_goals=unsatisfied_goals):
-            lines = ["CBMC REACHABILITY FAILURE (P4 - unreachable goals):"]
-            lines.append(f"  {len(unsatisfied_goals)} goal(s) not covered:")
-            for i, raw in enumerate(unsatisfied_goals, 1):
-                m = re.search(
-                    r"\] file .* line (\d+) .* condition '(.*?) != FALSE': FAILED$",
-                    raw,
-                )
-                if m:
-                    line_num, cond = m.group(1), m.group(2)
-                    if cond.startswith("cwp_reached["):
-                        state_m = re.search(r"\d+", cond)
-                        label = (
-                            f"CWP state {state_m.group()} unreachable"
-                            if state_m
-                            else cond
-                        )
-                    elif cond.endswith("_reached"):
-                        label = f"end event '{cond[: -len('_reached')]}' unreachable"
-                    else:
-                        label = cond
-                    lines.append(f"  {i}. line {line_num}: {label}")
-                else:
-                    lines.append(f"  {i}. {raw}")
-            return "\n".join(lines)
-        case CbmcSubProcessError(command=command):
-            return f"CBMC ERROR: failed to run '{command}'"
         case SubProcessRunError(process_name=process_name):
             return f"ERROR: failed to run '{process_name}'"
         case TypingAssignCompatabilityError(ltype=ltype, rtype=rtype):
             return f"TYPING ERROR: something of type '{rtype}' cannot by assigned to something of type '{ltype}'"
-        case TypingTripleVariableError(id=id):
-            return f"TYPING ERROR: '{id}' is not a variable and cannot be used as input"
-        case TypingListCompatibiltiyError(
-            first_type=first_type, second_type=second_type
-        ):
-            return f"TYPING ERROR: list of type '{first_type}' is not compatible with '{second_type}'"
-        case TypingListOfExpressionsError():
-            return "TYPING ERROR: list has an expresssion that is not a number, bool, or variable and is not allowed"
         case TypingNoTypeError(id=id):
             return f"TYPING ERROR: literal '{id}' has an unknown type"
-        case TypingNotCaughtError(explination=explination):
-            return explination
-        case StateArraySizeError(
-            id=id,
-            line=line,
-            column=column,
-            expected_size=expected_size,
-            actual_size=actual_size,
-        ):
-            if expected_size < 1:
-                return f"STATE ARRAY SIZE ERROR: array '{id}' at line {line.unwrap()}:{column.unwrap()}. Array size must be greater than 0."
-            else:
-                return f"STATE ARRAY SIZE ERROR: array '{id}' at line {line.unwrap()}:{column.unwrap()} has size {actual_size}, expected size {expected_size}"
+
         case _:
-            raise builtins.NotImplementedError(
-                f"Error message not implemented for error type: {error.__class__.__name__}"
-            )
+            raise builtins.NotImplementedError

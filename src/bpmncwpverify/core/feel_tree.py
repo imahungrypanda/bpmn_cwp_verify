@@ -1,351 +1,148 @@
-from returns.maybe import Maybe, Nothing
+"""
+Syntax tree for the subset of FEEL this tool uses, and a visitor over it.
+"""
 
+from dataclasses import dataclass
+from typing import Generic, TypeVar
 
-class ExpressionNode:
-    def accept(self, visitor: "FeelVisitor") -> None:
-        pass
+T = TypeVar("T")
 
+ARITHMETIC_OPS = ("+", "-", "*", "/", "**")
+COMPARISON_OPS = ("<", ">", "<=", ">=", "=", "!=")
+LOGIC_OPS = ("and", "or", "xor")
 
-class NumberLiteralNode(ExpressionNode):
-    __slots__ = ["value"]
 
-    def __init__(self, value: str):
-        self.value = value
+class FeelNode:
+    """Base class of every node in the FEEL syntax tree."""
 
-    def accept(self, visitor: "FeelVisitor") -> None:
-        visitor.visit_number_literal(self)
-        visitor.end_visit_number_literal(self)
+    __slots__ = ()
 
 
-class BoolLiteralNode(ExpressionNode):
-    __slots__ = ["value"]
+@dataclass(frozen=True)
+class Number(FeelNode):
+    value: int | float
 
-    def __init__(self, value: str):
-        self.value = value
 
-    def accept(self, visitor: "FeelVisitor") -> None:
-        visitor.visit_bool_literal(self)
-        visitor.end_visit_bool_literal(self)
+@dataclass(frozen=True)
+class Boolean(FeelNode):
+    value: bool
 
 
-class QualifiedNameNode(ExpressionNode):
-    __slots__ = ["name"]
+@dataclass(frozen=True)
+class Name(FeelNode):
+    """A state variable or constant; may be dotted, e.g. ``a.b``."""
 
-    def __init__(self, name: str):
-        self.name = name
+    name: str
 
-    def accept(self, visitor: "FeelVisitor") -> None:
-        visitor.visit_qualified_name(self)
-        visitor.end_visit_qualified_name(self)
 
+@dataclass(frozen=True)
+class ListExpr(FeelNode):
+    items: tuple[FeelNode, ...]
 
-class ListNode(ExpressionNode):
-    __slots__ = ["values", "type"]
 
-    def __init__(self, values: list[ExpressionNode]):
-        self.values = values
-        self.type: Maybe[str] = Nothing
+@dataclass(frozen=True)
+class Binary(FeelNode):
+    """``op`` is one of ARITHMETIC_OPS, COMPARISON_OPS or LOGIC_OPS."""
 
-    def accept(self, visitor: "FeelVisitor") -> None:
-        result = visitor.visit_list(self)
+    op: str
+    left: FeelNode
+    right: FeelNode
 
-        if result:
-            for item in self.values:
-                item.accept(visitor)
 
-        visitor.end_visit_list(self)
+@dataclass(frozen=True)
+class Negate(FeelNode):
+    operand: FeelNode
 
 
-class BinaryOperatorNode(ExpressionNode):
-    __slots__ = ["left", "right"]
+@dataclass(frozen=True)
+class Not(FeelNode):
+    operand: FeelNode
 
-    def __init__(self, left: ExpressionNode, right: ExpressionNode):
-        self.left = left
-        self.right = right
 
-    def accept(self, visitor: "FeelVisitor") -> None:
-        result = visitor.visit_binary_operator(self)
+@dataclass(frozen=True)
+class If(FeelNode):
+    condition: FeelNode
+    then_branch: FeelNode
+    else_branch: FeelNode
 
-        if result:
-            self.left.accept(visitor)
-            self.right.accept(visitor)
-        visitor.end_visit_binary_operator(self)
 
+@dataclass(frozen=True)
+class Choose(FeelNode):
+    """Any one of ``options``, picked nondeterministically."""
 
-class AddNode(BinaryOperatorNode):
-    pass
+    options: tuple[FeelNode, ...]
 
 
-class SubtractNode(BinaryOperatorNode):
-    pass
+@dataclass(frozen=True)
+class Triple(FeelNode):
+    """``(target, [inputs], value)``: set ``target`` to ``value``, which reads ``inputs``."""
 
+    target: Name
+    inputs: tuple[Name, ...]
+    value: FeelNode
 
-class MultiplyNode(BinaryOperatorNode):
-    pass
 
+@dataclass(frozen=True)
+class Behavior(FeelNode):
+    """A task behavior: one or more triples."""
 
-class DivideNode(BinaryOperatorNode):
-    pass
+    triples: tuple[Triple, ...]
 
 
-class PowerNode(BinaryOperatorNode):
-    pass
+class FeelVisitor(Generic[T]):
+    """
+    Visits a FEEL tree. ``visit`` calls ``visit_<NodeClass>``, with the class
+    name in snake case (``visit_number``, ``visit_list_expr``, ...). Subclasses
+    override the methods they need; the rest raise NotImplementedError.
+    """
 
+    def visit(self, node: FeelNode) -> T:
+        return getattr(self, _METHOD_NAMES[type(node)])(node)  # type: ignore[no-any-return]
 
-class ComparisonOperatorNode(ExpressionNode):
-    __slots__ = ["left", "right"]
+    def visit_number(self, node: Number) -> T:
+        raise NotImplementedError
 
-    def __init__(self, left: ExpressionNode, right: ExpressionNode):
-        self.left = left
-        self.right = right
+    def visit_boolean(self, node: Boolean) -> T:
+        raise NotImplementedError
 
-    def accept(self, visitor: "FeelVisitor") -> None:
-        result = visitor.visit_comparision(self)
+    def visit_name(self, node: Name) -> T:
+        raise NotImplementedError
 
-        if result:
-            self.left.accept(visitor)
-            self.right.accept(visitor)
-        visitor.end_visit_comparision(self)
+    def visit_list_expr(self, node: ListExpr) -> T:
+        raise NotImplementedError
 
+    def visit_binary(self, node: Binary) -> T:
+        raise NotImplementedError
 
-class LTNode(ComparisonOperatorNode):
-    pass
+    def visit_negate(self, node: Negate) -> T:
+        raise NotImplementedError
 
+    def visit_not(self, node: Not) -> T:
+        raise NotImplementedError
 
-class GTNode(ComparisonOperatorNode):
-    pass
+    def visit_if(self, node: If) -> T:
+        raise NotImplementedError
 
+    def visit_choose(self, node: Choose) -> T:
+        raise NotImplementedError
 
-class LENode(ComparisonOperatorNode):
-    pass
+    def visit_triple(self, node: Triple) -> T:
+        raise NotImplementedError
 
+    def visit_behavior(self, node: Behavior) -> T:
+        raise NotImplementedError
 
-class GENode(ComparisonOperatorNode):
-    pass
 
-
-class EqualNode(ComparisonOperatorNode):
-    pass
-
-
-class NotEqualNode(ComparisonOperatorNode):
-    pass
-
-
-class ConditionalOperatorNode(ExpressionNode):
-    __slots__ = ["left", "right"]
-
-    def __init__(self, left: ExpressionNode, right: ExpressionNode):
-        self.left = left
-        self.right = right
-
-    def accept(self, visitor: "FeelVisitor") -> None:
-        result = visitor.visit_conditional(self)
-
-        if result:
-            self.left.accept(visitor)
-            self.right.accept(visitor)
-        visitor.end_visit_conditional(self)
-
-
-class AndNode(ConditionalOperatorNode):
-    pass
-
-
-class OrNode(ConditionalOperatorNode):
-    pass
-
-
-class XOrNode(ConditionalOperatorNode):
-    pass
-
-
-class NotNode(ExpressionNode):
-    __slots__ = ["expression"]
-
-    def __init__(self, expression: ExpressionNode):
-        self.expression = expression
-
-    def accept(self, visitor: "FeelVisitor") -> None:
-        result = visitor.visit_not(self)
-
-        if result:
-            self.expression.accept(visitor)
-        visitor.end_visit_not(self)
-
-
-class IfNode(ExpressionNode):
-    __slots__ = ["condition", "thendo", "elsedo"]
-
-    def __init__(
-        self, condition: ExpressionNode, thendo: ExpressionNode, elsedo: ExpressionNode
-    ):
-        self.condition = condition
-        self.thendo = thendo
-        self.elsedo = elsedo
-
-    def accept(self, visitor: "FeelVisitor") -> None:
-        result = visitor.visit_if(self)
-
-        if result:
-            self.condition.accept(visitor)
-            self.thendo.accept(visitor)
-            self.elsedo.accept(visitor)
-        visitor.end_visit_if(self)
-
-
-class ChooseNode(ExpressionNode):
-    __slots__ = ["choices"]
-
-    def __init__(self, choices: ListNode):
-        self.choices = choices
-
-    def accept(self, visitor: "FeelVisitor") -> None:
-        result = visitor.visit_choose(self)
-
-        if result:
-            self.choices.accept(visitor)
-        visitor.end_visit_choose(self)
-
-
-class TripleNode(ExpressionNode):
-    __slots__ = ["target", "inputs", "value"]
-
-    def __init__(self, target: ExpressionNode, inputs: ListNode, value: ExpressionNode):
-        self.target = target
-        self.inputs = inputs
-        self.value = value
-
-    def accept(self, visitor: "FeelVisitor") -> None:
-        result = visitor.visit_triple(self)
-
-        if result:
-            self.target.accept(visitor)
-            self.inputs.accept(visitor)
-            self.value.accept(visitor)
-        visitor.end_visit_triple(self)
-
-
-class TripleListNode(ExpressionNode):
-    __slots__ = ["triples"]
-
-    def __init__(self, triples: list[TripleNode]):
-        self.triples = triples
-
-    def accept(self, visitor: "FeelVisitor") -> None:
-        result = visitor.visit_triple_list(self)
-
-        if result:
-            for triple in self.triples:
-                triple.accept(visitor)
-
-        visitor.end_visit_triple_list(self)
-
-
-#################
-# Generic Visitor
-#################
-
-
-class FeelVisitor:
-    def visit_number_literal(self, node: NumberLiteralNode) -> bool:
-        return True
-
-    def end_visit_number_literal(self, node: NumberLiteralNode) -> None:
-        pass
-
-    def visit_bool_literal(self, node: BoolLiteralNode) -> bool:
-        return True
-
-    def end_visit_bool_literal(self, node: BoolLiteralNode) -> None:
-        pass
-
-    def visit_qualified_name(self, node: QualifiedNameNode) -> bool:
-        return True
-
-    def end_visit_qualified_name(self, node: QualifiedNameNode) -> None:
-        pass
-
-    def visit_list(self, node: ListNode) -> bool:
-        return True
-
-    def end_visit_list(self, node: ListNode) -> None:
-        pass
-
-    def visit_binary_operator(self, node: BinaryOperatorNode) -> bool:
-        return True
-
-    def end_visit_binary_operator(self, node: BinaryOperatorNode) -> None:
-        pass
-
-    def visit_add(self, node: AddNode) -> bool:
-        return True
-
-    def end_visit_add(self, node: AddNode) -> None:
-        pass
-
-    def visit_subtract(self, node: SubtractNode) -> bool:
-        return True
-
-    def end_visit_subtract(self, node: SubtractNode) -> None:
-        pass
-
-    def visit_multiply(self, node: MultiplyNode) -> bool:
-        return True
-
-    def end_visit_multiply(self, node: MultiplyNode) -> None:
-        pass
-
-    def visit_divide(self, node: DivideNode) -> bool:
-        return True
-
-    def end_visit_divide(self, node: DivideNode) -> None:
-        pass
-
-    def visit_pow(self, node: PowerNode) -> bool:
-        return True
-
-    def end_visit_pow(self, node: PowerNode) -> None:
-        pass
-
-    def visit_comparision(self, node: ComparisonOperatorNode) -> bool:
-        return True
-
-    def end_visit_comparision(self, node: ComparisonOperatorNode) -> None:
-        pass
-
-    def visit_conditional(self, node: ConditionalOperatorNode) -> bool:
-        return True
-
-    def end_visit_conditional(self, node: ConditionalOperatorNode) -> None:
-        pass
-
-    def visit_not(self, node: NotNode) -> bool:
-        return True
-
-    def end_visit_not(self, node: NotNode) -> None:
-        pass
-
-    def visit_if(self, node: IfNode) -> bool:
-        return True
-
-    def end_visit_if(self, node: IfNode) -> None:
-        pass
-
-    def visit_choose(self, node: ChooseNode) -> bool:
-        return True
-
-    def end_visit_choose(self, node: ChooseNode) -> None:
-        pass
-
-    def visit_triple(self, node: TripleNode) -> bool:
-        return True
-
-    def end_visit_triple(self, node: TripleNode) -> None:
-        pass
-
-    def visit_triple_list(self, node: TripleListNode) -> bool:
-        return True
-
-    def end_visit_triple_list(self, node: TripleListNode) -> None:
-        pass
+_METHOD_NAMES: dict[type[FeelNode], str] = {
+    Number: "visit_number",
+    Boolean: "visit_boolean",
+    Name: "visit_name",
+    ListExpr: "visit_list_expr",
+    Binary: "visit_binary",
+    Negate: "visit_negate",
+    Not: "visit_not",
+    If: "visit_if",
+    Choose: "visit_choose",
+    Triple: "visit_triple",
+    Behavior: "visit_behavior",
+}
