@@ -1,10 +1,14 @@
+from returns.result import Failure
+
 from bpmncwpverify.core.cwp import Cwp, CwpEdge, CwpState, CwpVisitor
+from bpmncwpverify.core.error import Error, get_error_message
 from bpmncwpverify.util.stringmanager import (
     NL_DOUBLE,
     NL_SINGLE,
     IndentAction,
     StringManager,
 )
+from bpmncwpverify.visitors.feel_to_promela_visitor import condition_text
 
 START_STR = "//**********CWP VARIABLE DECLARATION************//"
 END_STR = "//**********************************************//"
@@ -21,6 +25,7 @@ class CwpPromelaVisitor(CwpVisitor):
         "proper_path_block",
         "var_reassignment",
         "list_of_cwp_states",
+        "errors",
     ]
 
     def __init__(self) -> None:
@@ -32,6 +37,20 @@ class CwpPromelaVisitor(CwpVisitor):
         self.proper_path_block = StringManager()
         self.var_reassignment = StringManager()
         self.list_of_cwp_states: list[str] = []
+        self.errors: list[Error] = []
+
+    def _expression(self, edge: CwpEdge) -> str:
+        """
+        The edge's condition as Promela. A FEEL condition that has no Promela
+        form is recorded in ``errors`` and written as an ``#error`` line, so the
+        model can't be mistaken for a good one.
+        """
+        text = condition_text(edge.expression)
+        if isinstance(text, Failure):
+            self.errors.append(text.failure())
+            message = get_error_message(text.failure()).replace("\n", " ")
+            return f"\n#error {message}\n"
+        return text.unwrap()
 
     def _build_mapping_function(self, state: CwpState) -> StringManager:
         guard = StringManager()
@@ -39,7 +58,7 @@ class CwpPromelaVisitor(CwpVisitor):
         guard.write_str("(")
         guard.write_str(
             " && ".join(
-                [f"{edge.expression}" for edge in state.in_edges]
+                [self._expression(edge) for edge in state.in_edges]
                 if state.in_edges
                 else ["true"]
             )
@@ -49,7 +68,7 @@ class CwpPromelaVisitor(CwpVisitor):
 
         guard.write_str(
             " || ".join(
-                [f"{edge.expression}" for edge in state.out_edges]
+                [self._expression(edge) for edge in state.out_edges]
                 if state.out_edges
                 else ["false"]
             )

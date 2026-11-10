@@ -176,3 +176,19 @@ def condition_to_promela(node: FeelNode) -> Result[str, Error]:
 def behavior_to_promela(node: Behavior | Triple) -> Result[str, Error]:
     """A type-checked behavior or triple as Promela statements, one per line."""
     return FeelToPromelaVisitor().visit(node)
+
+
+def condition_text(expression: str | FeelNode) -> Result[str, Error]:
+    """A flow or edge condition as Promela; a plain string is kept as it is."""
+    if isinstance(expression, str):
+        return Success(expression)
+    return condition_to_promela(expression)
+
+
+def behavior_text(behavior: str | FeelNode) -> Result[str, Error]:
+    """A task behavior as Promela; a plain string is kept as it is."""
+    if isinstance(behavior, str):
+        return Success(behavior)
+    if isinstance(behavior, Behavior | Triple):
+        return behavior_to_promela(behavior)
+    return _unsupported("a behavior that is not a triple", behavior)

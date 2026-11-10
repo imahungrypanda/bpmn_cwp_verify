@@ -1,3 +1,5 @@
+from returns.result import Failure, Result
+
 from bpmncwpverify.core.bpmn import (
     Bpmn,
     BpmnVisitor,
@@ -12,7 +14,12 @@ from bpmncwpverify.core.bpmn import (
     StartEvent,
     Task,
 )
+from bpmncwpverify.core.error import Error, get_error_message
 from bpmncwpverify.util.stringmanager import IndentAction, StringManager
+from bpmncwpverify.visitors.feel_to_promela_visitor import (
+    behavior_text,
+    condition_text,
+)
 
 ##############
 # Constants
@@ -160,7 +167,14 @@ class TokenPositions:
 
 
 class PromelaGenVisitor(BpmnVisitor):
-    __slots__ = ["defs", "var_defs", "behaviors", "init_proc_contents", "promela"]
+    __slots__ = [
+        "defs",
+        "var_defs",
+        "behaviors",
+        "init_proc_contents",
+        "promela",
+        "errors",
+    ]
 
     def __init__(self) -> None:
         self.defs = StringManager()
@@ -168,6 +182,19 @@ class PromelaGenVisitor(BpmnVisitor):
         self.behaviors = StringManager()
         self.init_proc_contents = StringManager()
         self.promela = StringManager()
+        self.errors: list[Error] = []
+
+    def _text(self, result: Result[str, Error]) -> str:
+        """
+        The Promela from a FEEL translation. A failure is recorded in
+        ``errors`` and written as an ``#error`` line, so the model can't be
+        mistaken for a good one.
+        """
+        if isinstance(result, Failure):
+            self.errors.append(result.failure())
+            message = get_error_message(result.failure()).replace("\n", " ")
+            return f"\n#error {message}\n"
+        return result.unwrap()
 
     def _generate_location_label(
         self, element: Node, flow_or_message: Flow | None = None
@@ -205,7 +232,11 @@ class PromelaGenVisitor(BpmnVisitor):
         Returns a list of the expressions that lie on the flows leaving a specific
         node. Example: ["x > 5"]
         """
-        return [flow.expression for flow in ctx.element.out_flows if flow.expression]
+        return [
+            self._text(condition_text(flow.expression))
+            for flow in ctx.element.out_flows
+            if flow.expression
+        ]
 
     def _build_expr_conditional(self, ctx: Context) -> StringManager:
         """
@@ -449,7 +480,7 @@ class PromelaGenVisitor(BpmnVisitor):
 
     def visit_task(self, task: Task) -> bool:
         context = Context(task)
-        context.behavior = task.behavior
+        context.behavior = self._text(behavior_text(task.behavior))
         context.boundary_events = task.msg_boundary_events
         self._gen_behavior_model(context)
         self._gen_var_defs(context)

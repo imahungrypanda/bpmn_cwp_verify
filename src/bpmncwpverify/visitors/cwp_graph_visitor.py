@@ -1,7 +1,14 @@
 import graphviz
+from returns.result import Failure
 
 from bpmncwpverify.core.cwp import CwpEdge, CwpState, CwpVisitor
 from bpmncwpverify.visitors.bpmn_graph_visitor import dot_edge, dot_node
+from bpmncwpverify.visitors.feel_to_promela_visitor import condition_text
+
+
+def _label(edge: CwpEdge) -> str:
+    text = condition_text(edge.expression)
+    return str(edge.expression) if isinstance(text, Failure) else text.unwrap()
 
 
 class CwpGraphVizVisitor(CwpVisitor):
@@ -19,7 +26,7 @@ class CwpGraphVizVisitor(CwpVisitor):
 
     def visit_edge(self, edge: CwpEdge) -> bool:
         if edge.source:
-            dot_edge(self.dot, edge.source.name, edge.dest.name, label=edge.expression)
+            dot_edge(self.dot, edge.source.name, edge.dest.name, label=_label(edge))
         else:
-            dot_edge(self.dot, "start", edge.dest.name, label=edge.expression)
+            dot_edge(self.dot, "start", edge.dest.name, label=_label(edge))
         return True
