@@ -4,6 +4,8 @@ from xml.etree.ElementTree import Element
 
 from bs4 import BeautifulSoup
 
+from bpmncwpverify.core.feel_tree import FeelNode
+
 
 class Cwp:
     __slots__ = ["states", "edges", "start_state", "end_states"]
@@ -59,7 +61,7 @@ class CwpEdge:
     def __init__(self, id: str, name: str) -> None:
         self.id = id
         self.name = name
-        self.expression: str = (
+        self.expression: str | FeelNode = (
             ""  # TODO: expression needs to always be on an edge and cannot be empty
         )
         self.parent_id: str
