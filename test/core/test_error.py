@@ -5,6 +5,7 @@ import pytest
 from returns.maybe import Nothing, Some
 
 from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedElementError,
     BpmnFlowIncomingError,
     BpmnFlowNoIdError,
     BpmnFlowOutgoingError,
@@ -159,6 +160,10 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnTaskFlowError("task_id"),
         "Task flow error: Task 'task_id' should have at least one incoming and one outgoing flow.",
+    ),
+    (
+        BpmnCbmcUnsupportedElementError("element_id", "reason"),
+        "BPMN ERROR: element 'element_id' cannot be expressed in C: reason",
     ),
     (
         BpmnUnrecognizedElement("element_name"),
@@ -336,6 +341,7 @@ test_ids: list[str] = [
     "BpmnSeqFlowNoExprError",
     "BpmnStructureError",
     "BpmnTaskFlowError",
+    "BpmnCbmcUnsupportedElementError",
     "BpmnUnrecognizedElement",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
