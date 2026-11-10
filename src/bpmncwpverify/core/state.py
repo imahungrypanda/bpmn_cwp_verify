@@ -1,4 +1,5 @@
-from collections.abc import Iterable
+import re
+from collections.abc import Callable, Iterable
 from typing import Any, Protocol, cast
 
 from antlr4 import CommonTokenStream, InputStream, ParseTreeWalker
@@ -876,3 +877,54 @@ class State:
                 lambda builder: builder.build()
             )
         )
+
+
+_LEGACY_OPERATOR = re.compile(r"&&|\|\||==|%|!(?!=)")
+
+
+def load_condition(
+    text: str,
+    state: State,
+    legacy_check: Callable[[str], Result[Any, Error]],
+) -> Result[Any, Error]:
+    """
+    Read a flow or CWP edge condition, which is either FEEL or the older
+    expression syntax. Returns the text itself for the older syntax, the FEEL
+    tree for FEEL, or the error that stops the load.
+
+    Text that is a valid older expression stays text, even when it is also
+    FEEL (``a > 3``), since both read it the same way and the back ends still
+    read text. Anything else is read as FEEL and gets FEEL errors, unless it
+    does not parse as FEEL and looks like the older syntax.
+    """
+    # Imported here because feel imports this module.
+    from bpmncwpverify.core import feel
+    from bpmncwpverify.core.error import FeelParseError
+
+    legacy = legacy_check(text)
+    if is_successful(legacy):
+        return Success(text)
+    parsed = feel.parse_expression(text)
+    if isinstance(parsed, Failure):
+        if isinstance(parsed.failure(), FeelParseError) and _LEGACY_OPERATOR.search(
+            text
+        ):
+            return legacy
+        return parsed
+    return feel.type_check(parsed.unwrap(), state)
+
+
+def load_behavior(text: str, state: State) -> Result[Any, Error]:
+    """
+    Read a task behavior, which is either FEEL triples or Promela code.
+    Returns the FEEL tree, or the text itself when it is not FEEL, or the
+    error that stops the load. Behaviors that start with '(' are FEEL.
+    """
+    from bpmncwpverify.core import feel
+
+    if not text.lstrip().startswith("("):
+        return Success(text)
+    parsed = feel.parse_behavior(text)
+    if isinstance(parsed, Failure):
+        return parsed
+    return feel.type_check(parsed.unwrap(), state)

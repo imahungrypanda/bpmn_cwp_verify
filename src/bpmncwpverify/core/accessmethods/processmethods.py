@@ -62,4 +62,8 @@ def from_xml(
 
     builder = builder.with_boundary_events()
 
-    return builder.build()
+    behaviors_result = builder.with_behaviors()
+    if not is_successful(behaviors_result):
+        return Failure(behaviors_result.failure())
+
+    return behaviors_result.unwrap().build()

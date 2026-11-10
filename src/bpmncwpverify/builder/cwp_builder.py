@@ -11,7 +11,7 @@ from bpmncwpverify.core.error import (
     Error,
 )
 from bpmncwpverify.core.expr import ExpressionListener
-from bpmncwpverify.core.state import State
+from bpmncwpverify.core.state import State, load_condition
 from bpmncwpverify.visitors.cwp_connectivity_visitor import CwpConnectivityVisitor
 
 
@@ -69,10 +69,13 @@ class CwpBuilder:
         edge = self._cwp.edges.get(parent)
         if not edge:
             raise Exception(CwpNoParentEdgeError(parent))
-        edge.expression = CwpEdge.cleanup_expression(expression)
-        result = expr_checker.type_check(edge.expression, state)
+        cleaned = CwpEdge.cleanup_expression(expression)
+        result = load_condition(
+            cleaned, state, lambda text: expr_checker.type_check(text, state)
+        )
         if not_(is_successful)(result):
             raise Exception(result.failure())
+        edge.expression = result.unwrap()
 
     def with_state(self, cwpState: CwpState) -> "CwpBuilder":
         self._cwp.states[cwpState.id] = cwpState
