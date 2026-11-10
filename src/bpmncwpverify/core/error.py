@@ -478,6 +478,15 @@ class FeelAssignTargetError(Error):
         self.name = name
 
 
+class FeelCbmcUnsupportedError(Error):
+    __slots__ = ["construct", "reason"]
+
+    def __init__(self, construct: str, reason: str) -> None:
+        super().__init__()
+        self.construct = construct
+        self.reason = reason
+
+
 class FlowExpressionError(Error):
     __slots__ = ["flow_id", "expression", "exception_str"]
 
@@ -844,6 +853,8 @@ def get_error_message(error: Error) -> str:
             return f"FEEL TYPING ERROR: in {construct}: {detail}"
         case FeelAssignTargetError(name=name):
             return f"FEEL TYPING ERROR: '{name}' cannot be assigned to; only state variables can"
+        case FeelCbmcUnsupportedError(construct=construct, reason=reason):
+            return f"FEEL ERROR: {construct} cannot be expressed in C: {reason}"
         case FlowExpressionError(
             flow_id=flow_id, expression=expression, exception_str=exception_str
         ):

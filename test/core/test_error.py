@@ -52,6 +52,7 @@ from bpmncwpverify.core.error import (
     ExpressionRelationCompatabilityError,
     ExpressionUnrecognizedID,
     FeelAssignTargetError,
+    FeelCbmcUnsupportedError,
     FeelConditionTypeError,
     FeelListTypeError,
     FeelNotAValueError,
@@ -372,6 +373,10 @@ test_inputs: list[tuple[Error, str]] = [
         FeelAssignTargetError("c"),
         "FEEL TYPING ERROR: 'c' cannot be assigned to; only state variables can",
     ),
+    (
+        FeelCbmcUnsupportedError("'**'", "the exponent must be a literal"),
+        "FEEL ERROR: '**' cannot be expressed in C: the exponent must be a literal",
+    ),
 ]
 
 test_ids: list[str] = [
@@ -448,6 +453,7 @@ test_ids: list[str] = [
     "FeelConditionTypeError",
     "FeelListTypeError",
     "FeelAssignTargetError",
+    "FeelCbmcUnsupportedError",
 ]
 
 
