@@ -207,6 +207,15 @@ class BpmnUnrecognizedElement(Error):
         self.element_name = element_name
 
 
+class BpmnCbmcUnsupportedElementError(Error):
+    __slots__ = ["element_id", "reason"]
+
+    def __init__(self, element_id: str, reason: str) -> None:
+        super().__init__()
+        self.element_id = element_id
+        self.reason = reason
+
+
 class CwpEdgeNoParentExprError(Error):
     __slots__ = ["edge"]
 
@@ -662,6 +671,10 @@ def get_error_message(error: Error) -> str:
             return f"BPMN ERROR at node: {node_id}. {error_msg}"
         case BpmnTaskFlowError(task_id=task_id):
             return f"Task flow error: Task '{task_id}' should have at least one incoming and one outgoing flow."
+        case BpmnCbmcUnsupportedElementError(element_id=element_id, reason=reason):
+            return (
+                f"BPMN ERROR: element '{element_id}' cannot be expressed in C: {reason}"
+            )
         case BpmnUnrecognizedElement(element_name=element_name):
             return f"BPMN ERROR: Unrecognized bpmn element type in workflow: {element_name}"
         case CwpEdgeNoParentExprError(edge=edge):
