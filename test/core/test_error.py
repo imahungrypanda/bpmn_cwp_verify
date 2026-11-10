@@ -30,6 +30,7 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcBuildError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -164,6 +165,10 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnCbmcUnsupportedElementError("element_id", "reason"),
         "BPMN ERROR: element 'element_id' cannot be expressed in C: reason",
+    ),
+    (
+        CbmcBuildError("reason"),
+        "CBMC ERROR: unable to build C program: reason",
     ),
     (
         BpmnUnrecognizedElement("element_name"),
@@ -342,6 +347,7 @@ test_ids: list[str] = [
     "BpmnStructureError",
     "BpmnTaskFlowError",
     "BpmnCbmcUnsupportedElementError",
+    "CbmcBuildError",
     "BpmnUnrecognizedElement",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
