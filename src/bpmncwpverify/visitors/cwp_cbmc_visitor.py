@@ -1,10 +1,14 @@
+from returns.result import Failure, Result, Success
+
 from bpmncwpverify.core.cwp import Cwp, CwpEdge, CwpState, CwpVisitor
+from bpmncwpverify.core.error import Error
 from bpmncwpverify.util.stringmanager import (
     NL_DOUBLE,
     NL_SINGLE,
     IndentAction,
     StringManager,
 )
+from bpmncwpverify.visitors.feel_to_cbmc_visitor import condition_to_c
 
 START_STR = "//**********CWP VARIABLE DECLARATION************//"
 END_STR = "//**********************************************//"
@@ -21,6 +25,12 @@ class CwpCbmcVisitor(CwpVisitor):
       edge expressions
     - ``void updateState(void)``: moves along a CWP edge (or stays put) and
       asserts that the move was valid and that exactly one state is active
+
+    An edge expression is plain C text or a type-checked FEEL tree. A FEEL
+    edge is evaluated once per function, into a ``bool edge<N>_value``, so
+    every state that uses the edge sees the same value even when it contains
+    ``choose``. A FEEL expression that cannot be expressed in C is recorded in
+    ``errors`` (use ``result()``) and leaves an ``#error`` line in the output.
     """
 
     __slots__ = [
@@ -33,6 +43,9 @@ class CwpCbmcVisitor(CwpVisitor):
         "var_reassignment",
         "list_of_cwp_states",
         "_visited",
+        "_edge_numbers",
+        "_edges_defined",
+        "errors",
     ]
 
     def __init__(self) -> None:
@@ -45,27 +58,56 @@ class CwpCbmcVisitor(CwpVisitor):
         self.var_reassignment = StringManager()
         self.list_of_cwp_states: list[str] = []
         self._visited: set[str] = set()
+        self._edge_numbers: dict[str, int] = {}
+        self._edges_defined: dict[int, set[str]] = {}
+        self.errors: list[Error] = []
 
-    @staticmethod
-    def _expr(edge: CwpEdge) -> str:
+    def result(self) -> Result[str, Error]:
+        if self.errors:
+            return Failure(self.errors[0])
+        return Success(repr(self))
+
+    def _feel_value(self, edge: CwpEdge, out: StringManager) -> str:
+        """Defines the FEEL edge's value in ``out`` once, and returns its name."""
+        number = self._edge_numbers.setdefault(edge.id, len(self._edge_numbers))
+        name = f"edge{number}_value"
+        defined = self._edges_defined.setdefault(id(out), set())
+        if edge.id in defined:
+            return name
+        defined.add(edge.id)
+        assert not isinstance(edge.expression, str)
+        translated = condition_to_c(edge.expression, f"edge{number}")
+        if isinstance(translated, Failure):
+            self.errors.append(translated.failure())
+            out.write_str(f"#error FEEL expression of edge {edge.id}", NL_SINGLE)
+            out.write_str(f"bool {name} = false;", NL_SINGLE)
+        else:
+            c = translated.unwrap()
+            for statement in c.statements:
+                out.write_str(statement, NL_SINGLE)
+            out.write_str(f"bool {name} = {c.expr};", NL_SINGLE)
+        return name
+
+    def _expr(self, edge: CwpEdge, out: StringManager) -> str:
+        if not isinstance(edge.expression, str):
+            return self._feel_value(edge, out)
         # An edge with no expression places no constraint.
         return f"({edge.expression})" if edge.expression.strip() else "true"
 
-    def _build_mapping_function(self, state: CwpState) -> str:
-        in_exprs = " && ".join(self._expr(e) for e in state.in_edges) or "true"
-        out_exprs = " || ".join(self._expr(e) for e in state.out_edges) or "false"
+    def _build_mapping_function(self, state: CwpState, out: StringManager) -> str:
+        in_exprs = " && ".join(self._expr(e, out) for e in state.in_edges) or "true"
+        out_exprs = " || ".join(self._expr(e, out) for e in state.out_edges) or "false"
         return f"({in_exprs}) && !({out_exprs})"
 
     def _build_prime_var(self, state: CwpState) -> None:
+        mapping = self._build_mapping_function(state, self.prime_vars)
         self.prime_vars.write_str(
-            f"bool {state.name}{PRIME_SUFFIX} = {self._build_mapping_function(state)};",
-            NL_SINGLE,
+            f"bool {state.name}{PRIME_SUFFIX} = {mapping};", NL_SINGLE
         )
 
     def _build_vars(self, state: CwpState) -> None:
-        self.vars.write_str(
-            f"{state.name} = {self._build_mapping_function(state)};", NL_SINGLE
-        )
+        mapping = self._build_mapping_function(state, self.vars)
+        self.vars.write_str(f"{state.name} = {mapping};", NL_SINGLE)
 
     def _build_proper_path_block(self, state: CwpState) -> None:
         for out_edge in state.out_edges:

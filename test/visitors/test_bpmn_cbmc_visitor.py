@@ -1,9 +1,14 @@
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 from returns.result import Failure, Success
+from returns.unsafe import unsafe_perform_io
 
+from bpmncwpverify.builder.cbmc_builder import CbmcBuilder
+from bpmncwpverify.core.accessmethods import bpmnmethods
+from bpmncwpverify.core.accessmethods.cwpmethods import CwpXmlParser
 from bpmncwpverify.core.bpmn import (
     Bpmn,
     EndEvent,
@@ -20,8 +25,14 @@ from bpmncwpverify.core.bpmn import (
 from bpmncwpverify.core.error import (
     BpmnCbmcUnsupportedElementError,
     BpmnSeqFlowNoExprError,
+    FeelCbmcUnsupportedError,
 )
+from bpmncwpverify.core.feel import parse_behavior, parse_expression
+from bpmncwpverify.core.state import State
+from bpmncwpverify.util.file import element_tree_from_string
 from bpmncwpverify.visitors.bpmn_cbmc_visitor import CbmcBpmnGenVisitor
+
+FEEL = "./test/resources/feel/"
 
 
 def seq(src: Node, dst: Node, expr: str = "") -> SequenceFlow:
@@ -426,6 +437,106 @@ def test_generated_c_runs_in_cbmc(tmp_path):
     path.write_text(harness)
     run = subprocess.run(
         ["cbmc", str(path), "--unwind", "5"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert "VERIFICATION SUCCESSFUL" in run.stdout, run.stdout
+
+
+def _feel(text: str):
+    return parse_expression(text).unwrap()
+
+
+def test_feel_behavior_and_conditions_are_translated():
+    s, g, t, e, e2 = (
+        start(),
+        ExclusiveGatewayNode("G", "G"),
+        Task("T", "T", ""),
+        end(),
+        end("E2"),
+    )
+    t.behavior = parse_behavior("(x, [x], x + 1), (y, [], choose [1, 2])").unwrap()
+    seq(s, t)
+    seq(t, g)
+    seq(g, e, "")
+    seq(g, e2, "")
+    g.out_flows[0].expression = _feel("x > 2 and choose [true, false]")
+    g.out_flows[1].expression = _feel("not (x > 2)")
+    visitor = generate(make_bpmn(("P", [s, t, g, e, e2])))
+    code = repr(visitor)
+    assert visitor.errors == []
+    assert "x = (x + 1);" in code
+    assert "void updateState(void);" in code
+    assert code.count("updateState();") == 1
+    assert "unsigned int T_feel_choose_0 = nondet_uint();" in code
+    assert "y = (T_feel_choose_0 == 0 ? 1 : 2);" in code
+    assert "unsigned int guard0_choose_0 = nondet_uint();" in code
+    assert "bool guard0 = (((x > 2) && (guard0_choose_0 == 0 ? true : false)));" in code
+    assert "bool guard1 = ((!(x > 2)));" in code
+
+
+def test_feel_that_c_cannot_express_is_an_error():
+    s, t, e = start(), Task("T", "T", ""), end()
+    t.behavior = parse_behavior("(x, [x], x + 1.5)").unwrap()
+    seq(s, t)
+    seq(t, e)
+    visitor = generate(make_bpmn(("P", [s, t, e])))
+    assert isinstance(visitor.result().failure(), FeelCbmcUnsupportedError)
+
+
+@pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc not installed")
+def test_feel_behavior_with_choose_in_cbmc(tmp_path):
+    s, t, e = start(), Task("T", "T", ""), end()
+    t.behavior = parse_behavior("(x, [], choose [1, 2, 3])").unwrap()
+    seq(s, t)
+    seq(t, e)
+    code = repr(generate(make_bpmn(("P", [s, t, e]))))
+
+    def run(check: str):
+        path = tmp_path / "model.c"
+        path.write_text(
+            f"int x = 0;\nvoid updateState(void) {{}}\n{code}int main(void) {{\n\tP_init();\n"
+            f"\tfor (int i = 0; i < 4; i++) P_step();\n\t{check}\n\treturn 0;\n}}\n"
+        )
+        return subprocess.run(
+            ["cbmc", str(path), "--unwind", "5"],
+            check=False,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+    assert "VERIFICATION SUCCESSFUL" in run("assert(x >= 1 && x <= 3);")
+    for value in (1, 2, 3):
+        assert "VERIFICATION FAILED" in run(f"assert(x != {value});")
+
+
+@pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc not installed")
+def test_feel_workflow_verifies_in_cbmc(tmp_path):
+    state_text = (Path(FEEL) / "state.txt").read_text()
+    state = State.from_str(state_text).unwrap()
+    cwp_xml = unsafe_perform_io(
+        element_tree_from_string((Path(FEEL) / "test_cwp.xml").read_text()).unwrap()
+    )
+    bpmn_xml = unsafe_perform_io(
+        element_tree_from_string((Path(FEEL) / "test_bpmn.bpmn").read_text()).unwrap()
+    )
+    builder = (
+        CbmcBuilder()
+        .with_state(state)
+        .with_cwp(CwpXmlParser.from_xml(cwp_xml, state).unwrap())
+        .with_bpmn(bpmnmethods.from_xml(bpmn_xml, state).unwrap())
+    )
+    code = builder.build().unwrap()
+    bound = builder.unwind_bound().unwrap()
+
+    # The CWP's start state is only made active by calculateState(), which the
+    # builder's main does not call; call it first, as the Promela init does.
+    code = code.replace("_init();", "_init(); calculateState();", 1)
+    path = tmp_path / "model.c"
+    path.write_text(code)
+    run = subprocess.run(
+        ["cbmc", str(path), "--unwind", str(bound), "--unwinding-assertions"],
         check=False,
         capture_output=True,
         text=True,

@@ -1,9 +1,13 @@
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+from returns.result import Success
 
 from bpmncwpverify.core.cwp import Cwp, CwpEdge, CwpState
+from bpmncwpverify.core.error import FeelCbmcUnsupportedError
+from bpmncwpverify.core.feel import parse_expression
 from bpmncwpverify.visitors.cwp_cbmc_visitor import (
     END_STR,
     START_STR,
@@ -183,3 +187,42 @@ class TestCbmc:
         result = _cbmc(_write(tmp_path, _program(v, body)))
         assert "VERIFICATION FAILED" in result.stdout
         assert "In more than one or no state" in result.stdout
+
+
+class TestFeelEdges:
+    @staticmethod
+    def _feel_cwp(expr: str) -> Cwp:
+        cwp = _build_cwp()
+        cwp.states["Start"].out_edges[0].expression = parse_expression(expr).unwrap()
+        return cwp
+
+    def test_feel_edge_is_evaluated_once_per_function(self) -> None:
+        v = _generate(self._feel_cwp("x = 1 or x = 5"))
+        assert v.errors == []
+        out = str(v)
+        assert out.count("bool edge0_value = ((x == 1) || (x == 5));") == 2
+        assert "bool A_prime = (edge0_value) && !((x == 2));" in out
+        assert "A = (edge0_value) && !((x == 2));" in out
+
+    def test_choose_is_hoisted_and_shared(self) -> None:
+        v = _generate(self._feel_cwp("choose [true, false]"))
+        out = str(v.prime_vars)
+        assert out.count("unsigned int edge0_choose_0 = nondet_uint();") == 1
+        assert "bool edge0_value = (edge0_choose_0 == 0 ? true : false);" in out
+
+    def test_unsupported_feel_is_an_error(self) -> None:
+        v = _generate(self._feel_cwp("x > 1.5"))
+        assert isinstance(v.result().failure(), FeelCbmcUnsupportedError)
+        assert "#error" in str(v)
+
+    def test_plain_string_edges_are_unchanged(self) -> None:
+        v = _generate(_build_cwp())
+        assert v.result() == Success(str(v))
+
+    @pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc not installed")
+    def test_feel_cwp_in_cbmc(self, tmp_path: Path) -> None:
+        v = _generate(self._feel_cwp("x = 1"))
+        src = _program(v, "x = 1;\ncalculateState();\nupdateState();\nassert(A);")
+        src = src.replace("int x;", "unsigned int nondet_uint(void);\nint x;")
+        run = _cbmc(_write(tmp_path, src))
+        assert "VERIFICATION SUCCESSFUL" in run.stdout, run.stdout

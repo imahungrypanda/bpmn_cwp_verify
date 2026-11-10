@@ -19,7 +19,12 @@ from bpmncwpverify.core.error import (
     BpmnSeqFlowNoExprError,
     Error,
 )
+from bpmncwpverify.core.feel_tree import Behavior, Triple
 from bpmncwpverify.util.stringmanager import IndentAction, StringManager
+from bpmncwpverify.visitors.feel_to_cbmc_visitor import (
+    behavior_to_c,
+    condition_to_c,
+)
 
 ##############
 # Constants
@@ -342,11 +347,24 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
             self._unsupported(task, "tasks with boundary events are not supported")
             return True
         translator = _BehaviorTranslator()
-        try:
-            lines = translator.translate(task.behavior)
-        except _BehaviorError as e:
-            self._unsupported(task, str(e))
+        if isinstance(task.behavior, str):
+            try:
+                lines = translator.translate(task.behavior)
+            except _BehaviorError as e:
+                self._unsupported(task, str(e))
+                return True
+        elif not isinstance(task.behavior, Behavior | Triple):
+            self._unsupported(task, "a FEEL behavior must be made of triples")
             return True
+        else:
+            feel_lines = behavior_to_c(task.behavior, f"{task.id}_feel")
+            if isinstance(feel_lines, Failure):
+                self.errors.append(feel_lines.failure())
+                return True
+            # A triple cannot call updateState(), so a FEEL behavior always
+            # ends with it, as in the Promela back end.
+            lines = [*feel_lines.unwrap(), "updateState();"]
+            translator.uses_update_state = True
         if translator.uses_update_state and not self._update_state_declared:
             self._update_state_declared = True
             self.behaviors.write_str(UPDATE_STATE_DECL, NL_DOUBLE)
@@ -377,7 +395,11 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         if not gateway.out_flows:
             self._unsupported(gateway, "exclusive gateways need an outgoing flow")
             return True
-        missing = [f for f in gateway.out_flows if not f.expression]
+        missing = [
+            f
+            for f in gateway.out_flows
+            if isinstance(f.expression, str) and not f.expression
+        ]
         if missing:
             for flow in missing:
                 self.errors.append(BpmnSeqFlowNoExprError(gateway.id, flow.id))
@@ -387,7 +409,15 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         body: list[str] = []
         flows = gateway.out_flows
         for i, flow in enumerate(flows):
-            expr = " ".join(flow.expression.split())
+            if isinstance(flow.expression, str):
+                expr = " ".join(flow.expression.split())
+            else:
+                condition = condition_to_c(flow.expression, f"guard{i}")
+                if isinstance(condition, Failure):
+                    self.errors.append(condition.failure())
+                    return True
+                body += condition.unwrap().statements
+                expr = condition.unwrap().expr
             body.append(f"bool guard{i} = ({expr});")
         any_guard = " || ".join(f"guard{i}" for i in range(len(flows)))
         body.append(f'assert(({any_guard}) && "No viable path to take");')
