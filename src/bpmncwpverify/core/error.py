@@ -405,6 +405,93 @@ class FeelUnsupportedError(Error):
         self.column = column
 
 
+class FeelAssignTypeError(Error):
+    __slots__ = ["column", "line", "target", "target_type", "value_type"]
+
+    def __init__(
+        self, target: str, target_type: str, value_type: str, line: int, column: int
+    ) -> None:
+        super().__init__()
+        self.target = target
+        self.target_type = target_type
+        self.value_type = value_type
+        self.line = line
+        self.column = column
+
+
+class FeelBehaviorTypeError(Error):
+    __slots__ = ["expr_type"]
+
+    def __init__(self, expr_type: str) -> None:
+        super().__init__()
+        self.expr_type = expr_type
+
+
+class FeelConditionTypeError(Error):
+    __slots__ = ["column", "expr_type", "line"]
+
+    def __init__(self, expr_type: str, line: int, column: int) -> None:
+        super().__init__()
+        self.expr_type = expr_type
+        self.line = line
+        self.column = column
+
+
+class FeelInvalidTargetError(Error):
+    __slots__ = ["column", "line", "name", "reason"]
+
+    def __init__(self, name: str, reason: str, line: int, column: int) -> None:
+        super().__init__()
+        self.name = name
+        self.reason = reason
+        self.line = line
+        self.column = column
+
+
+class FeelMixedTypesError(Error):
+    __slots__ = ["column", "construct", "line", "types"]
+
+    def __init__(
+        self, construct: str, types: tuple[str, ...], line: int, column: int
+    ) -> None:
+        super().__init__()
+        self.construct = construct
+        self.types = types
+        self.line = line
+        self.column = column
+
+
+class FeelNumberTypeError(Error):
+    __slots__ = ["column", "line", "literal"]
+
+    def __init__(self, literal: str, line: int, column: int) -> None:
+        super().__init__()
+        self.literal = literal
+        self.line = line
+        self.column = column
+
+
+class FeelOperatorTypeError(Error):
+    __slots__ = ["column", "line", "op", "types"]
+
+    def __init__(self, op: str, types: tuple[str, ...], line: int, column: int) -> None:
+        super().__init__()
+        self.op = op
+        self.types = types
+        self.line = line
+        self.column = column
+
+
+class FeelUnknownNameError(Error):
+    __slots__ = ["column", "line", "name"]
+
+    def __init__(self, name: str, line: int, column: int) -> None:
+        super().__init__()
+        self.name = name
+        self.line = line
+        self.column = column
+
+
 class FileReadFileError(Error):
     __slots__ = ["msg"]
 
@@ -781,6 +868,30 @@ def get_error_message(error: Error) -> str:
             return f"FEEL SYNTAX ERROR: {msg}"
         case FeelUnsupportedError(construct=construct, line=line, column=column):
             return f"FEEL ERROR: {construct} (line {line}:{column}) is not supported; only numbers, booleans, names, lists, arithmetic, comparisons, logic, 'if', 'choose' and triples can be used"
+        case FeelAssignTypeError(
+            target=target,
+            target_type=target_type,
+            value_type=value_type,
+            line=line,
+            column=column,
+        ):
+            return f"FEEL TYPE ERROR: (line {line}:{column}) '{target}' has type '{target_type}' and cannot be assigned a value of type '{value_type}'"
+        case FeelBehaviorTypeError(expr_type=expr_type):
+            return f"FEEL TYPE ERROR: a behavior must be a triple or a parenthesized list of triples, not something of type '{expr_type}'"
+        case FeelConditionTypeError(expr_type=expr_type, line=line, column=column):
+            return f"FEEL TYPE ERROR: (line {line}:{column}) a condition must be a bool, not '{expr_type}'"
+        case FeelInvalidTargetError(name=name, reason=reason, line=line, column=column):
+            return f"FEEL TYPE ERROR: (line {line}:{column}) '{name}' cannot be assigned: {reason}"
+        case FeelMixedTypesError(
+            construct=construct, types=types, line=line, column=column
+        ):
+            return f"FEEL TYPE ERROR: (line {line}:{column}) the items of {construct} must have compatible types, found {', '.join(types)}"
+        case FeelNumberTypeError(literal=literal, line=line, column=column):
+            return f"FEEL TYPE ERROR: (line {line}:{column}) '{literal}' is not an integer that fits in an int"
+        case FeelOperatorTypeError(op=op, types=types, line=line, column=column):
+            return f"FEEL TYPE ERROR: (line {line}:{column}) '{op}' cannot be applied to {', '.join(types)}"
+        case FeelUnknownNameError(name=name, line=line, column=column):
+            return f"FEEL TYPE ERROR: (line {line}:{column}) '{name}' is not a variable, constant or enum value"
         case FileReadFileError(msg=msg):
             return f"FILE ERROR: '{msg}'"
         case FileWriteFileError(msg=msg):

@@ -23,6 +23,16 @@ from bpmncwpverify.core.feel_tree import (
     Triple,
     TripleList,
 )
+from bpmncwpverify.core.state import State
+from bpmncwpverify.visitors.feel_typechecker_visitor import (
+    type_check as _type_check,
+)
+from bpmncwpverify.visitors.feel_typechecker_visitor import (
+    type_check_behavior as _type_check_behavior,
+)
+from bpmncwpverify.visitors.feel_typechecker_visitor import (
+    type_check_condition as _type_check_condition,
+)
 
 # Tokens that only occur in FEEL constructs this tool does not use.
 _UNSUPPORTED_TOKENS: dict[int, str] = {
@@ -188,3 +198,21 @@ def parse(text: str) -> Result[FeelExpr, Error]:
         return Failure(unsupported.error)
     except ParseCancellationException as exception:
         return Failure(FeelSyntaxError(str(exception)))
+
+
+def type_check(expr: FeelExpr, state: State) -> Result[str, Error]:
+    """
+    Returns the type of a parsed expression, or a type error. The state
+    must already be type checked.
+    """
+    return _type_check(expr, state)
+
+
+def type_check_condition(expr: FeelExpr, state: State) -> Result[str, Error]:
+    """Type checks an expression that must be a bool, e.g. a flow or edge condition."""
+    return _type_check_condition(expr, state)
+
+
+def type_check_behavior(expr: FeelExpr, state: State) -> Result[str, Error]:
+    """Type checks a task behavior, which must be a triple or a triple list."""
+    return _type_check_behavior(expr, state)
