@@ -51,6 +51,8 @@ from bpmncwpverify.core.error import (
     ExpressionRelationalNotError,
     ExpressionRelationCompatabilityError,
     ExpressionUnrecognizedID,
+    FeelSyntaxError,
+    FeelUnsupportedError,
     FileReadFileError,
     FileWriteFileError,
     FileXmlParseError,
@@ -255,6 +257,14 @@ test_inputs: list[tuple[Error, str]] = [
         "EXPR ERROR: '_id' is not recognized as a literal or something stored in the symbol table",
     ),
     (
+        FeelSyntaxError("line 1:2 bad"),
+        "FEEL SYNTAX ERROR: line 1:2 bad",
+    ),
+    (
+        FeelUnsupportedError("a string", 1, 2),
+        "FEEL ERROR: a string (line 1:2) is not supported; only numbers, booleans, names, lists, arithmetic, comparisons, logic, 'if', 'choose' and triples can be used",
+    ),
+    (
         FileReadFileError("file_name"),
         "FILE ERROR: 'file_name'",
     ),
@@ -387,6 +397,8 @@ test_ids: list[str] = [
     "ExpressionRelationCompatabilityError",
     "ExpressionRelationalNotError",
     "ExpressionUnrecognizedID",
+    "FeelSyntaxError",
+    "FeelUnsupportedError",
     "FileReadFileError",
     "FileWriteFileError",
     "FileXmlParseError",
