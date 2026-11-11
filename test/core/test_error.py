@@ -30,6 +30,7 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcBuildError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -168,6 +169,10 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnCbmcUnsupportedElementError("id", "boundary event"),
         "BPMN ERROR: boundary event 'id' cannot be expressed in C for CBMC.",
+    ),
+    (
+        CbmcBuildError("bad type"),
+        "CBMC ERROR: Could not build C for CBMC: bad type.",
     ),
     (
         CwpEdgeNoParentExprError(mock.Mock(attrib="edge_attrib")),
@@ -343,6 +348,7 @@ test_ids: list[str] = [
     "BpmnTaskFlowError",
     "BpmnUnrecognizedElement",
     "BpmnCbmcUnsupportedElementError",
+    "CbmcBuildError",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
     "CwpFileStructureError",
