@@ -224,6 +224,30 @@ class CbmcBuildError(Error):
         self.reason = reason
 
 
+class CbmcAssertionError(Error):
+    __slots__ = ["failures"]
+
+    def __init__(self, failures: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.failures = failures
+
+
+class CbmcRunError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class CbmcUnreachableError(Error):
+    __slots__ = ["unreachable"]
+
+    def __init__(self, unreachable: list[str]) -> None:
+        super().__init__()
+        self.unreachable = unreachable
+
+
 class CwpEdgeNoParentExprError(Error):
     __slots__ = ["edge"]
 
@@ -687,6 +711,22 @@ def get_error_message(error: Error) -> str:
             return f"BPMN ERROR: {element_type} '{element_id}' cannot be expressed in C for CBMC."
         case CbmcBuildError(reason=reason):
             return f"CBMC ERROR: Could not build C for CBMC: {reason}."
+        case CbmcAssertionError(failures=failures):
+            lines = ["CBMC ERROR: Assertion failed:"]
+            lines.append(f"{len(failures)} failure(s) occurred:")
+            for idx, failure in enumerate(failures):
+                lines.append(
+                    f"{idx + 1}: {failure['description']} (line {failure['line']})"
+                )
+            return "\n".join(lines)
+        case CbmcRunError(reason=reason):
+            return f"CBMC ERROR: Could not run CBMC: {reason}."
+        case CbmcUnreachableError(unreachable=unreachable):
+            lines = ["CBMC ERROR: Unreachable:"]
+            lines.append(f"{len(unreachable)} item(s) never reached by the workflow:")
+            for idx, item in enumerate(unreachable):
+                lines.append(f"{idx + 1}: {item}")
+            return "\n".join(lines)
         case CwpEdgeNoParentExprError(edge=edge):
             return f"CWP ERROR: Expression or parent node not found in edge. Edge details: {edge.attrib}."
         case CwpEdgeNoStateError(edge=edge):

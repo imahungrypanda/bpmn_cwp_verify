@@ -169,3 +169,16 @@ def test_linear_workflow_compiles_and_verifies(tmp_path):
     result = _run_cbmc(tmp_path, c, 4)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "VERIFICATION SUCCESSFUL" in result.stdout
+
+
+def test_given_simple_when_build_then_covers_only_under_reachability_macro():
+    c = _builder(*_simple()).build().unwrap()
+    lines = c.splitlines()
+
+    for i, line in enumerate(lines):
+        if "__CPROVER_cover" in line:
+            assert any("#ifdef REACHABILITY" in earlier for earlier in lines[:i])
+    # the start state is never covered, the state after it and the end event are
+    assert "CWP state: Start" not in c
+    assert "CWP state: Increment_x" in c
+    assert "end event: event_JS1LAA" in c
