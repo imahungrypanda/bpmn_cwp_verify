@@ -2,6 +2,7 @@
 import pytest
 from returns.result import Failure, Success
 
+from bpmncwpverify.core import typechecking
 from bpmncwpverify.core.error import TypingAssignCompatabilityError, TypingNoTypeError
 from bpmncwpverify.core.typechecking import (
     BIT,
@@ -109,3 +110,45 @@ class Test_get_type_literal:
         # then
         expected = Failure(TypingNoTypeError(literal))
         assert expected == result
+
+
+class TestFeelRules:
+    @pytest.mark.parametrize(
+        "ltype, rtype, expected",
+        [
+            ("bit", "bit", "byte"),
+            ("byte", "bit", "byte"),
+            ("byte", "short", "short"),
+            ("int", "byte", "int"),
+        ],
+    )
+    def test_arithmetic_numeric(self, ltype, rtype, expected):
+        assert typechecking.get_feel_arithmetic_type_result(ltype, rtype) == Success(
+            expected
+        )
+
+    @pytest.mark.parametrize("ltype, rtype", [("bool", "byte"), ("Door", "Door")])
+    def test_arithmetic_non_numeric_fails(self, ltype, rtype):
+        assert isinstance(
+            typechecking.get_feel_arithmetic_type_result(ltype, rtype), Failure
+        )
+
+    def test_negate(self):
+        assert typechecking.get_feel_negate_type_result("byte") == Success("short")
+        assert typechecking.get_feel_negate_type_result("int") == Success("int")
+        assert isinstance(typechecking.get_feel_negate_type_result("bool"), Failure)
+
+    def test_comparison(self):
+        f = typechecking.get_feel_comparison_type_result
+        assert f("byte", "int", True) == Success("bool")
+        assert f("bool", "bool", False) == Success("bool")
+        assert f("Door", "Door", False) == Success("bool")
+        assert isinstance(f("bool", "bool", True), Failure)
+        assert isinstance(f("Door", "Light", False), Failure)
+        assert isinstance(f("bool", "byte", False), Failure)
+
+    def test_unified(self):
+        f = typechecking.get_feel_unified_type_result
+        assert f("bit", "short") == Success("short")
+        assert f("Door", "Door") == Success("Door")
+        assert isinstance(f("Door", "bool"), Failure)
