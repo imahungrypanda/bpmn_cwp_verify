@@ -387,6 +387,24 @@ class ExpressionUnrecognizedID(Error):
         return False
 
 
+class FeelSyntaxError(Error):
+    __slots__ = ["msg"]
+
+    def __init__(self, msg: str) -> None:
+        super().__init__()
+        self.msg = msg
+
+
+class FeelUnsupportedError(Error):
+    __slots__ = ["construct", "line", "column"]
+
+    def __init__(self, construct: str, line: int, column: int) -> None:
+        super().__init__()
+        self.construct = construct
+        self.line = line
+        self.column = column
+
+
 class FileReadFileError(Error):
     __slots__ = ["msg"]
 
@@ -759,6 +777,10 @@ def get_error_message(error: Error) -> str:
             return f"EXPR ERROR: sometiong of type '{_type}' cannot be used with a relational not"
         case ExpressionUnrecognizedID(_id=_id):
             return f"EXPR ERROR: '{_id}' is not recognized as a literal or something stored in the symbol table"
+        case FeelSyntaxError(msg=msg):
+            return f"FEEL SYNTAX ERROR: {msg}"
+        case FeelUnsupportedError(construct=construct, line=line, column=column):
+            return f"FEEL ERROR: {construct} (line {line}:{column}) is not supported; only numbers, booleans, names, lists, arithmetic, comparisons, logic, 'if', 'choose' and triples can be used"
         case FileReadFileError(msg=msg):
             return f"FILE ERROR: '{msg}'"
         case FileWriteFileError(msg=msg):
