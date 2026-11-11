@@ -5,6 +5,7 @@ import pytest
 from returns.maybe import Nothing, Some
 
 from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedElementError,
     BpmnFlowIncomingError,
     BpmnFlowNoIdError,
     BpmnFlowOutgoingError,
@@ -163,6 +164,10 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnUnrecognizedElement("element_name"),
         "BPMN ERROR: Unrecognized bpmn element type in workflow: element_name",
+    ),
+    (
+        BpmnCbmcUnsupportedElementError("id", "boundary event"),
+        "BPMN ERROR: boundary event 'id' cannot be expressed in C for CBMC.",
     ),
     (
         CwpEdgeNoParentExprError(mock.Mock(attrib="edge_attrib")),
@@ -337,6 +342,7 @@ test_ids: list[str] = [
     "BpmnStructureError",
     "BpmnTaskFlowError",
     "BpmnUnrecognizedElement",
+    "BpmnCbmcUnsupportedElementError",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
     "CwpFileStructureError",
