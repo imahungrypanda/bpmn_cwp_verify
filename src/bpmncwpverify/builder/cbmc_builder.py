@@ -1,7 +1,9 @@
+import re
+
 from returns.result import Failure, Result, Success
 
 from bpmncwpverify.builder.cbmc_bound import compute_unwinding_bound
-from bpmncwpverify.core.bpmn import Bpmn
+from bpmncwpverify.core.bpmn import Bpmn, EndEvent
 from bpmncwpverify.core.cwp import Cwp
 from bpmncwpverify.core.error import CbmcBuildError, Error, NotInitializedError
 from bpmncwpverify.core.state import State
@@ -12,11 +14,18 @@ from bpmncwpverify.visitors.bpmn_cbmc_visitor import (
 )
 from bpmncwpverify.visitors.cwp_cbmc_visitor import (
     INIT_FUNC,
+    STATE_PREFIX,
+    STATE_VAR,
     UPDATE_FUNC,
     CwpCbmcVisitor,
 )
 
 STEP_VAR = "bpmn_step"
+COVER_FUNC = "cwp_cover"
+REACHABILITY_MACRO = "REACHABILITY"
+# Comments that tell the runner what a `__CPROVER_cover` stands for
+END_EVENT_MARK = "end event: "
+CWP_STATE_MARK = "CWP state: "
 _C_TYPES = {
     "bit": "unsigned char",
     "bool": "bool",
@@ -49,12 +58,59 @@ def _generate_state_c(state: State) -> Result[str, Error]:
     return Success("\n".join(lines) + "\n\n")
 
 
+def _state_enumerator(name: str) -> str:
+    # the same naming as the CWP visitor's enumerators
+    return STATE_PREFIX + re.sub(r"\W", "_", name)
+
+
+def _generate_cover_func(cwp: Cwp, cwp_visitor: CwpCbmcVisitor) -> str:
+    """
+    A function with one cover per CWP state, for the reachability run only. The
+    start state is left out: the initial values put the CWP straight into the
+    state after it, so the start state is never the active one.
+    """
+    lines = [f"#ifdef {REACHABILITY_MACRO}", f"static void {COVER_FUNC}(void) {{"]
+    for name, state in cwp_visitor.states.items():
+        if state is cwp.start_state or name == cwp.start_state.name:
+            continue
+        lines.append(
+            f"  __CPROVER_cover({STATE_VAR} == {_state_enumerator(state.name)}); "
+            f"/* {CWP_STATE_MARK}{name} */"
+        )
+    lines += ["}", "#endif", ""]
+    return "\n".join(lines) + "\n"
+
+
+def _cover_end_events(bpmn: Bpmn, bpmn_visitor: CbmcBpmnGenVisitor) -> None:
+    """Adds a reachability-only cover to the transition of each end event."""
+    end_ids = {
+        node_id
+        for process in bpmn.processes.values()
+        for node_id, node in process.all_items().items()
+        if isinstance(node, EndEvent)
+    }
+    for transition in bpmn_visitor.transitions:
+        if transition.label in end_ids:
+            transition.body += [
+                f"#ifdef {REACHABILITY_MACRO}",
+                f"__CPROVER_cover(1); /* {END_EVENT_MARK}{transition.label} */",
+                "#endif",
+            ]
+
+
+def _write_cover_call(out: StringManager) -> None:
+    out.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    out.write_str(f"{COVER_FUNC}();", NL_SINGLE)
+    out.write_str("#endif", NL_SINGLE)
+
+
 def _generate_main(bpmn_visitor: CbmcBpmnGenVisitor, bound: int) -> str:
     out = StringManager()
     out.write_str("int main(void) {", NL_SINGLE, IndentAction.INC)
     # Like the Promela init block: the CWP starts in the state the initial
     # variable values put it in, before any process runs
     out.write_str(f"{INIT_FUNC}();", NL_SINGLE)
+    _write_cover_call(out)
     out.write_str(
         f"for (unsigned int {STEP_VAR} = 0; {STEP_VAR} < {bound}u; {STEP_VAR}++) {{",
         NL_SINGLE,
@@ -63,6 +119,7 @@ def _generate_main(bpmn_visitor: CbmcBpmnGenVisitor, bound: int) -> str:
     out.write_str(f"if ({bpmn_visitor.all_ended_expr()}) break;", NL_SINGLE)
     out.write_str(bpmn_visitor.gen_pass(), NL_SINGLE)
     out.write_str(f"{UPDATE_FUNC}();", NL_SINGLE)
+    _write_cover_call(out)
     out.write_str("}", NL_SINGLE, IndentAction.DEC)
     out.write_str("return 0;", NL_SINGLE)
     out.write_str("}", NL_SINGLE, IndentAction.DEC)
@@ -80,9 +137,11 @@ def _generate_c(state: State, cwp: Cwp, bpmn: Bpmn) -> Result[str, Error]:
     checked = bpmn_visitor.get_result()
     if isinstance(checked, Failure):
         return checked
+    _cover_end_events(bpmn, bpmn_visitor)
     bound = compute_unwinding_bound(bpmn)
     return Success(
         f"{HELPER_DEFS_STR}\n{state_c.unwrap()}{cwp_visitor}\n"
+        f"{_generate_cover_func(cwp, cwp_visitor)}"
         f"{bpmn_visitor.gen_defs()}\n{_generate_main(bpmn_visitor, bound)}"
     )
 

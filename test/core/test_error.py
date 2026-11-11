@@ -30,7 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
     CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -219,6 +222,23 @@ test_inputs: list[tuple[Error, str]] = [
         "EXPR ERROR: sometiong of type '_type' cannot be used with a mathmatical negator",
     ),
     (
+        CbmcAssertionError(
+            [
+                {"description": "token placed on an occupied place", "line": "10"},
+                {"description": "CWP: not a valid CWP transition", "line": "20"},
+            ]
+        ),
+        "CBMC ERROR: Assertion failed:\n2 failure(s) occurred:\n1: token placed on an occupied place (line 10)\n2: CWP: not a valid CWP transition (line 20)",
+    ),
+    (
+        CbmcRunError("cbmc not found"),
+        "CBMC ERROR: Could not run CBMC: cbmc not found.",
+    ),
+    (
+        CbmcUnreachableError(["CWP state: A", "end event: B"]),
+        "CBMC ERROR: Unreachable:\n2 item(s) never reached by the workflow:\n1: CWP state: A\n2: end event: B",
+    ),
+    (
         ExpressionParseError("exception_str"),
         "Error while parsing expression: exception_str",
     ),
@@ -348,7 +368,10 @@ test_ids: list[str] = [
     "BpmnTaskFlowError",
     "BpmnUnrecognizedElement",
     "BpmnCbmcUnsupportedElementError",
+    "CbmcAssertionError",
     "CbmcBuildError",
+    "CbmcRunError",
+    "CbmcUnreachableError",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
     "CwpFileStructureError",

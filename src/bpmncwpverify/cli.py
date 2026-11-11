@@ -1,4 +1,5 @@
 import argparse
+from typing import cast
 from xml.etree.ElementTree import Element
 
 import requests
@@ -9,6 +10,9 @@ from returns.unsafe import unsafe_perform_io
 
 from bpmncwpverify.core.accessmethods import bpmnmethods
 from bpmncwpverify.core.accessmethods.cwpmethods import CwpXmlParser
+from bpmncwpverify.core.bpmn import Bpmn
+from bpmncwpverify.core.cbmc import CbmcVerificationReport, verify_with_cbmc
+from bpmncwpverify.core.cwp import Cwp
 from bpmncwpverify.core.error import (
     Error,
     HttpError,
@@ -52,22 +56,44 @@ def _get_argument_parser() -> "argparse.ArgumentParser":
         action="store_true",
         help="Run verification remotely on AWS Lambda",
     )
+    argument_parser.add_argument(
+        "--cbmc",
+        action="store_true",
+        help="Verify with CBMC instead of SPIN",
+    )
     return argument_parser
+
+
+def _verify_with_backend(
+    state: State, cwp: Cwp, bpmn: Bpmn, cbmc: bool
+) -> IOResult[SpinVerificationReport | CbmcVerificationReport, Error]:
+    if cbmc:
+        return cast(
+            IOResult[SpinVerificationReport | CbmcVerificationReport, Error],
+            verify_with_cbmc(state, cwp, bpmn),
+        )
+    return cast(
+        IOResult[SpinVerificationReport | CbmcVerificationReport, Error],
+        verify_with_spin(state, cwp, bpmn),
+    )
 
 
 def _verify_with_spin(
     state_str: str,
     cwp_xml: Element,
     bpmn_xml: Element,
-) -> IOResult[SpinVerificationReport, Error]:
-    result: IOResult[SpinVerificationReport, Error] = IOResult.from_result(
-        State.from_str(state_str)
-    ).bind(  # pyright: ignore[reportUnknownMemberType]
-        lambda state: IOResult.from_result(CwpXmlParser.from_xml(cwp_xml, state)).bind(  # pyright: ignore[reportUnknownMemberType]
-            lambda cwp: IOResult.from_result(
-                bpmnmethods.from_xml(bpmn_xml, state)
+    cbmc: bool = False,
+) -> IOResult[SpinVerificationReport | CbmcVerificationReport, Error]:
+    result: IOResult[SpinVerificationReport | CbmcVerificationReport, Error] = (
+        IOResult.from_result(State.from_str(state_str)).bind(  # pyright: ignore[reportUnknownMemberType]
+            lambda state: IOResult.from_result(
+                CwpXmlParser.from_xml(cwp_xml, state)
             ).bind(  # pyright: ignore[reportUnknownMemberType]
-                lambda bpmn: verify_with_spin(state, cwp, bpmn)
+                lambda cwp: IOResult.from_result(
+                    bpmnmethods.from_xml(bpmn_xml, state)
+                ).bind(  # pyright: ignore[reportUnknownMemberType]
+                    lambda bpmn: _verify_with_backend(state, cwp, bpmn, cbmc)
+                )
             )
         )
     )
@@ -76,14 +102,14 @@ def _verify_with_spin(
 
 
 def _verify_with_spin_from_files(
-    state_file: str, cwp_file: str, bpmn_file: str
-) -> IOResult[SpinVerificationReport, Error]:
-    result: IOResult[SpinVerificationReport, Error] = read_file_as_string(
-        state_file
-    ).bind(  # pyright: ignore[reportUnknownMemberType]
-        lambda state: read_file_as_string(cwp_file).bind(  # pyright: ignore[reportUnknownMemberType]
-            lambda cwp: read_file_as_string(bpmn_file).bind(  # pyright: ignore[reportUnknownMemberType]
-                lambda bpmn: web_verify(state, cwp, bpmn)
+    state_file: str, cwp_file: str, bpmn_file: str, cbmc: bool = False
+) -> IOResult[SpinVerificationReport | CbmcVerificationReport, Error]:
+    result: IOResult[SpinVerificationReport | CbmcVerificationReport, Error] = (
+        read_file_as_string(state_file).bind(  # pyright: ignore[reportUnknownMemberType]
+            lambda state: read_file_as_string(cwp_file).bind(  # pyright: ignore[reportUnknownMemberType]
+                lambda cwp: read_file_as_string(bpmn_file).bind(  # pyright: ignore[reportUnknownMemberType]
+                    lambda bpmn: web_verify(state, cwp, bpmn, cbmc)
+                )
             )
         )
     )
@@ -136,10 +162,10 @@ def _verify_on_lambda_from_files(
 
 
 def cli_verify(
-    state_file: str, cwp_file: str, bpmn_file: str
-) -> IOResult[SpinVerificationReport, Error]:
-    result: IOResult[SpinVerificationReport, Error] = _verify_with_spin_from_files(
-        state_file, cwp_file, bpmn_file
+    state_file: str, cwp_file: str, bpmn_file: str, cbmc: bool = False
+) -> IOResult[SpinVerificationReport | CbmcVerificationReport, Error]:
+    result: IOResult[SpinVerificationReport | CbmcVerificationReport, Error] = (
+        _verify_with_spin_from_files(state_file, cwp_file, bpmn_file, cbmc)
     )
     return result
 
@@ -148,32 +174,41 @@ def verify() -> None:
     argument_parser = _get_argument_parser()
     args = argument_parser.parse_args()
 
+    if args.cloud and args.cbmc:
+        print("--cbmc cannot be combined with --cloud")
+        return
+
+    result: IOResult[SpinVerificationReport | CbmcVerificationReport, Error]
     if args.cloud:
-        result = _verify_on_lambda_from_files(
-            args.state_file, args.cwp_file, args.bpmn_file
+        result = cast(
+            IOResult[SpinVerificationReport | CbmcVerificationReport, Error],
+            _verify_on_lambda_from_files(
+                args.state_file, args.cwp_file, args.bpmn_file
+            ),
         )
     else:
-        result = cli_verify(args.state_file, args.cwp_file, args.bpmn_file)
+        result = cli_verify(args.state_file, args.cwp_file, args.bpmn_file, args.cbmc)
 
     if not_(is_successful)(result):
         error: Error = unsafe_perform_io(result.failure())
         print(get_error_message(error))
         return
 
-    spin_verification_report: SpinVerificationReport = unsafe_perform_io(
-        result.unwrap()
-    )
-    print(spin_verification_report.spin_report)
+    report = unsafe_perform_io(result.unwrap())
+    if isinstance(report, CbmcVerificationReport):
+        print(report.cbmc_report)
+    else:
+        print(report.spin_report)
 
 
 def web_verify(
-    state: str, cwp_str: str, bpmn_str: str
-) -> IOResult[SpinVerificationReport, Error]:
-    result: IOResult[SpinVerificationReport, Error] = element_tree_from_string(
-        cwp_str
-    ).bind(  # pyright: ignore[reportUnknownMemberType]
-        lambda cwp: element_tree_from_string(bpmn_str).bind(  # pyright: ignore[reportUnknownMemberType]
-            lambda bpmn: _verify_with_spin(state, cwp, bpmn)
+    state: str, cwp_str: str, bpmn_str: str, cbmc: bool = False
+) -> IOResult[SpinVerificationReport | CbmcVerificationReport, Error]:
+    result: IOResult[SpinVerificationReport | CbmcVerificationReport, Error] = (
+        element_tree_from_string(cwp_str).bind(  # pyright: ignore[reportUnknownMemberType]
+            lambda cwp: element_tree_from_string(bpmn_str).bind(  # pyright: ignore[reportUnknownMemberType]
+                lambda bpmn: _verify_with_spin(state, cwp, bpmn, cbmc)
+            )
         )
     )
     return result
