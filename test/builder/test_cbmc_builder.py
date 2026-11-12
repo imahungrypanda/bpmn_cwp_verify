@@ -26,7 +26,7 @@ from bpmncwpverify.core.error import (
 )
 from bpmncwpverify.core.state import State
 
-RESOURCES = Path(__file__).parent.parent / "resources"
+RESOURCES = Path(__file__).parent.parent / "resources" / "feel"
 needs_cbmc = pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc missing")
 
 

@@ -24,8 +24,8 @@ from bpmncwpverify.core.error import (
 from bpmncwpverify.core.spin import SpinVerificationReport
 
 RESOURCES = Path(__file__).parent / "resources"
-FACE2FACE = RESOURCES / "face2face"
-SIMPLE = RESOURCES / "simple_example"
+FACE2FACE = RESOURCES / "feel" / "face2face"
+SIMPLE = RESOURCES / "feel" / "simple_example"
 
 needs_cbmc = pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc missing")
 
