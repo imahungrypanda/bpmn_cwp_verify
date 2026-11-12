@@ -6,6 +6,7 @@ from returns.result import Failure, Result, Success
 from bpmncwpverify.core.error import (
     Error,
     TypingAssignCompatabilityError,
+    TypingNegateBoolError,
     TypingNoTypeError,
 )
 
@@ -100,3 +101,69 @@ def get_type_literal(literal: str) -> Result[str, TypingNoTypeError]:
         return Failure(TypingNoTypeError(literal))
     except Exception:
         return Failure(TypingNoTypeError(literal))
+
+
+# FEEL type rules. Numeric types are ordered from narrowest to widest.
+NUMERIC_TYPES: Final[tuple[str, ...]] = (BIT, BYTE, SHORT, INT)
+
+
+def is_numeric(type_: str) -> bool:
+    return type_ in NUMERIC_TYPES
+
+
+def _wider(ltype: str, rtype: str) -> str:
+    return max(ltype, rtype, key=NUMERIC_TYPES.index)
+
+
+def get_feel_arithmetic_type_result(
+    ltype: str,
+    rtype: str,
+    error: Callable[[str, str], Error] = TypingAssignCompatabilityError,
+) -> Result[str, Error]:
+    """
+    The type of `ltype op rtype` for + - * /. Unlike get_computation_type_result
+    it accepts bit, since the literals 0 and 1 are bits. The result is at least
+    a byte because the result of an operation on bits is not a bit.
+    """
+    if is_numeric(ltype) and is_numeric(rtype):
+        return Success(_wider(_wider(ltype, rtype), BYTE))
+    return Failure(error(ltype, rtype))
+
+
+def get_feel_negate_type_result(
+    type_: str, error: Callable[[str], Error] = TypingNegateBoolError
+) -> Result[str, Error]:
+    """The type of `-x`: negatives need a signed type, so at least a short."""
+    if is_numeric(type_):
+        return Success(_wider(type_, SHORT))
+    return Failure(error(type_))
+
+
+def get_feel_comparison_type_result(
+    ltype: str,
+    rtype: str,
+    ordered: bool,
+    error: Callable[[str, str], Error] = TypingAssignCompatabilityError,
+) -> Result[str, Error]:
+    """
+    The type of a comparison. Ordering (< > <= >=) needs numbers; equality
+    also accepts two bools or two values of the same enum.
+    """
+    if is_numeric(ltype) and is_numeric(rtype):
+        return Success(BOOL)
+    if not ordered and ltype == rtype and ltype != ENUM:
+        return Success(BOOL)
+    return Failure(error(ltype, rtype))
+
+
+def get_feel_unified_type_result(
+    ltype: str,
+    rtype: str,
+    error: Callable[[str, str], Error] = TypingAssignCompatabilityError,
+) -> Result[str, Error]:
+    """The one type that two alternatives (if branches, choices) share."""
+    if ltype == rtype:
+        return Success(ltype)
+    if is_numeric(ltype) and is_numeric(rtype):
+        return Success(_wider(ltype, rtype))
+    return Failure(error(ltype, rtype))

@@ -3,8 +3,8 @@ from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
 from bpmncwpverify.core.bpmn import Node, Process, SequenceFlow, Task
-from bpmncwpverify.core.error import Error, FlowExpressionError, get_error_message
-from bpmncwpverify.core.expr import ExpressionListener
+from bpmncwpverify.core.error import Error
+from bpmncwpverify.core.feel import parse, type_check_behavior, type_check_condition
 from bpmncwpverify.core.state import State
 from bpmncwpverify.visitors.bpmnchecks.bpmnvalidate import validate_process
 
@@ -55,17 +55,15 @@ class ProcessBuilder:
         assert isinstance(target_node, Node)
 
         if expression:
-            result = ExpressionListener.type_check(expression, self._state)
-            if not_(is_successful)(result):
-                return Failure(
-                    FlowExpressionError(
-                        flow_id, expression, get_error_message(result.failure())
-                    )
-                )
-            assert result.unwrap() == "bool", (
-                f"Expected Expression type to be bool on flow: {flow_id}"
-            )
+            parsed = parse(expression)
+            if not_(is_successful)(parsed):
+                return Failure(parsed.failure())
+            tree = parsed.unwrap()
+            checked = type_check_condition(tree, self._state)
+            if not_(is_successful)(checked):
+                return Failure(checked.failure())
             flow.expression = expression
+            flow.expression_tree = tree
 
         flow.source_node = source_node
         flow.target_node = target_node
@@ -74,5 +72,23 @@ class ProcessBuilder:
         target_node.add_in_flow(flow)
         return Success(self)
 
+    def _with_behaviors(self) -> Result["ProcessBuilder", Error]:
+        """Parses and type checks the FEEL behavior of every task."""
+        for item in self._process.all_items().values():
+            if not isinstance(item, Task) or not item.behavior.strip():
+                continue
+            parsed = parse(item.behavior)
+            if not_(is_successful)(parsed):
+                return Failure(parsed.failure())
+            tree = parsed.unwrap()
+            checked = type_check_behavior(tree, self._state)
+            if not_(is_successful)(checked):
+                return Failure(checked.failure())
+            item.behavior_tree = tree
+        return Success(self)
+
     def build(self) -> Result[Process, Error]:
+        behaviors = self._with_behaviors()
+        if not_(is_successful)(behaviors):
+            return Failure(behaviors.failure())
         return validate_process(self._process)

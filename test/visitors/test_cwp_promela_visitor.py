@@ -1,6 +1,7 @@
 # type: ignore
 import pytest
 
+from bpmncwpverify.core.feel import parse
 from bpmncwpverify.util.stringmanager import (
     NL_DOUBLE,
     NL_SINGLE,
@@ -108,12 +109,12 @@ class TestCwpPromelaVisitor:
 
         mock_state = mocker.Mock()
         mock_state.in_edges = [
-            mocker.Mock(expression="in_edge1"),
-            mocker.Mock(expression="in_edge2"),
+            mocker.Mock(expression_tree=parse("a = 1").unwrap()),
+            mocker.Mock(expression_tree=parse("b = 1").unwrap()),
         ]
         mock_state.out_edges = [
-            mocker.Mock(expression="out_edge1"),
-            mocker.Mock(expression="out_edge2"),
+            mocker.Mock(expression_tree=parse("c = 1").unwrap()),
+            mocker.Mock(expression_tree=parse("d = 1").unwrap()),
         ]
         visitor = CwpPromelaVisitor()
 
@@ -121,9 +122,9 @@ class TestCwpPromelaVisitor:
 
         calls = [
             mocker.call("("),
-            mocker.call("in_edge1 && in_edge2"),
+            mocker.call("(a == 1) && (b == 1)"),
             mocker.call(") && !("),
-            mocker.call("out_edge1 || out_edge2"),
+            mocker.call("(c == 1) || (d == 1)"),
             mocker.call(")"),
         ]
 

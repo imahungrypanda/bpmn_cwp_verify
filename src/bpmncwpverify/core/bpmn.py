@@ -8,6 +8,7 @@ from bpmncwpverify.core.error import (
     BpmnUnrecognizedElement,
     Error,
 )
+from bpmncwpverify.core.feel_tree import FeelExpr
 
 BPMN_XML_NAMESPACE = {"bpmn": "http://www.omg.org/spec/BPMN/20100524/MODEL"}
 
@@ -229,7 +230,7 @@ class IntermediateEvent(Event):
 
 # Activity classes
 class Task(Node):
-    __slots__ = ["behavior", "msg_boundary_events"]
+    __slots__ = ["behavior", "behavior_tree", "msg_boundary_events"]
     """
     Action that can be acted upon varaible(s)
     """
@@ -269,6 +270,9 @@ class Task(Node):
     def __init__(self, id: str, name: str, behavior: str) -> None:
         super().__init__(id, name)
         self.behavior = behavior
+        # The parsed FEEL behavior; None when the task has no behavior. Set by
+        # ProcessBuilder, which type checks it against the state.
+        self.behavior_tree: FeelExpr | None = None
         self.msg_boundary_events: list[Task.BoundaryEvent] = []
 
     def add_boundary_event(self, event: BoundaryEvent) -> None:
@@ -372,7 +376,7 @@ class SequenceFlow(Flow):
     Representation of how activities and events are connected
     """
 
-    __slots__ = ["expression"]
+    __slots__ = ["expression", "expression_tree"]
 
     def __init__(self, id: str, name: str):
         """
@@ -380,6 +384,8 @@ class SequenceFlow(Flow):
         """
         super().__init__(id, name)
         self.expression: str = ""
+        # The parsed FEEL condition; None when the flow has no condition.
+        self.expression_tree: FeelExpr | None = None
 
     def accept(self, visitor: "BpmnVisitor") -> None:
         if visitor.visit_sequence_flow(self) and not self.is_leaf:

@@ -5,6 +5,7 @@ import pytest
 from returns.maybe import Nothing, Some
 
 from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedElementError,
     BpmnFlowIncomingError,
     BpmnFlowNoIdError,
     BpmnFlowOutgoingError,
@@ -29,6 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
+    CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -46,6 +51,17 @@ from bpmncwpverify.core.error import (
     ExpressionRelationalNotError,
     ExpressionRelationCompatabilityError,
     ExpressionUnrecognizedID,
+    FeelAssignTypeError,
+    FeelBehaviorTypeError,
+    FeelCbmcUnsupportedError,
+    FeelConditionTypeError,
+    FeelInvalidTargetError,
+    FeelMixedTypesError,
+    FeelNumberTypeError,
+    FeelOperatorTypeError,
+    FeelSyntaxError,
+    FeelUnknownNameError,
+    FeelUnsupportedError,
     FileReadFileError,
     FileWriteFileError,
     FileXmlParseError,
@@ -165,6 +181,14 @@ test_inputs: list[tuple[Error, str]] = [
         "BPMN ERROR: Unrecognized bpmn element type in workflow: element_name",
     ),
     (
+        BpmnCbmcUnsupportedElementError("id", "boundary event"),
+        "BPMN ERROR: boundary event 'id' cannot be expressed in C for CBMC.",
+    ),
+    (
+        CbmcBuildError("bad type"),
+        "CBMC ERROR: Could not build C for CBMC: bad type.",
+    ),
+    (
         CwpEdgeNoParentExprError(mock.Mock(attrib="edge_attrib")),
         "CWP ERROR: Expression or parent node not found in edge. Edge details: edge_attrib.",
     ),
@@ -209,6 +233,23 @@ test_inputs: list[tuple[Error, str]] = [
         "EXPR ERROR: sometiong of type '_type' cannot be used with a mathmatical negator",
     ),
     (
+        CbmcAssertionError(
+            [
+                {"description": "token placed on an occupied place", "line": "10"},
+                {"description": "CWP: not a valid CWP transition", "line": "20"},
+            ]
+        ),
+        "CBMC ERROR: Assertion failed:\n2 failure(s) occurred:\n1: token placed on an occupied place (line 10)\n2: CWP: not a valid CWP transition (line 20)",
+    ),
+    (
+        CbmcRunError("cbmc not found"),
+        "CBMC ERROR: Could not run CBMC: cbmc not found.",
+    ),
+    (
+        CbmcUnreachableError(["CWP state: A", "end event: B"]),
+        "CBMC ERROR: Unreachable:\n2 item(s) never reached by the workflow:\n1: CWP state: A\n2: end event: B",
+    ),
+    (
         ExpressionParseError("exception_str"),
         "Error while parsing expression: exception_str",
     ),
@@ -223,6 +264,50 @@ test_inputs: list[tuple[Error, str]] = [
     (
         ExpressionUnrecognizedID("_id"),
         "EXPR ERROR: '_id' is not recognized as a literal or something stored in the symbol table",
+    ),
+    (
+        FeelSyntaxError("line 1:2 bad"),
+        "FEEL SYNTAX ERROR: line 1:2 bad",
+    ),
+    (
+        FeelUnsupportedError("a string", 1, 2),
+        "FEEL ERROR: a string (line 1:2) is not supported; only numbers, booleans, names, lists, arithmetic, comparisons, logic, 'if', 'choose' and triples can be used",
+    ),
+    (
+        FeelCbmcUnsupportedError("a list", 1, 2),
+        "FEEL ERROR: a list (line 1:2) cannot be expressed in C for CBMC",
+    ),
+    (
+        FeelAssignTypeError("x", "byte", "bool", 1, 2),
+        "FEEL TYPE ERROR: (line 1:2) 'x' has type 'byte' and cannot be assigned a value of type 'bool'",
+    ),
+    (
+        FeelBehaviorTypeError("bool"),
+        "FEEL TYPE ERROR: a behavior must be a triple or a parenthesized list of triples, not something of type 'bool'",
+    ),
+    (
+        FeelConditionTypeError("byte", 1, 2),
+        "FEEL TYPE ERROR: (line 1:2) a condition must be a bool, not 'byte'",
+    ),
+    (
+        FeelInvalidTargetError("c", "it is not a variable", 1, 2),
+        "FEEL TYPE ERROR: (line 1:2) 'c' cannot be assigned: it is not a variable",
+    ),
+    (
+        FeelMixedTypesError("a choose", ("bool", "byte"), 1, 2),
+        "FEEL TYPE ERROR: (line 1:2) the items of a choose must have compatible types, found bool, byte",
+    ),
+    (
+        FeelNumberTypeError("2.5", 1, 2),
+        "FEEL TYPE ERROR: (line 1:2) '2.5' is not an integer that fits in an int",
+    ),
+    (
+        FeelOperatorTypeError("+", ("bool", "byte"), 1, 2),
+        "FEEL TYPE ERROR: (line 1:2) '+' cannot be applied to bool, byte",
+    ),
+    (
+        FeelUnknownNameError("q", 1, 2),
+        "FEEL TYPE ERROR: (line 1:2) 'q' is not a variable, constant or enum value",
     ),
     (
         FileReadFileError("file_name"),
@@ -337,6 +422,11 @@ test_ids: list[str] = [
     "BpmnStructureError",
     "BpmnTaskFlowError",
     "BpmnUnrecognizedElement",
+    "BpmnCbmcUnsupportedElementError",
+    "CbmcAssertionError",
+    "CbmcBuildError",
+    "CbmcRunError",
+    "CbmcUnreachableError",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
     "CwpFileStructureError",
@@ -352,6 +442,17 @@ test_ids: list[str] = [
     "ExpressionRelationCompatabilityError",
     "ExpressionRelationalNotError",
     "ExpressionUnrecognizedID",
+    "FeelSyntaxError",
+    "FeelUnsupportedError",
+    "FeelCbmcUnsupportedError",
+    "FeelAssignTypeError",
+    "FeelBehaviorTypeError",
+    "FeelConditionTypeError",
+    "FeelInvalidTargetError",
+    "FeelMixedTypesError",
+    "FeelNumberTypeError",
+    "FeelOperatorTypeError",
+    "FeelUnknownNameError",
     "FileReadFileError",
     "FileWriteFileError",
     "FileXmlParseError",

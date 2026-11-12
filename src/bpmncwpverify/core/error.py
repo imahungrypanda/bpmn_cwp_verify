@@ -207,6 +207,47 @@ class BpmnUnrecognizedElement(Error):
         self.element_name = element_name
 
 
+class BpmnCbmcUnsupportedElementError(Error):
+    __slots__ = ["element_id", "element_type"]
+
+    def __init__(self, element_id: str, element_type: str) -> None:
+        super().__init__()
+        self.element_id = element_id
+        self.element_type = element_type
+
+
+class CbmcBuildError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class CbmcAssertionError(Error):
+    __slots__ = ["failures"]
+
+    def __init__(self, failures: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.failures = failures
+
+
+class CbmcRunError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class CbmcUnreachableError(Error):
+    __slots__ = ["unreachable"]
+
+    def __init__(self, unreachable: list[str]) -> None:
+        super().__init__()
+        self.unreachable = unreachable
+
+
 class CwpEdgeNoParentExprError(Error):
     __slots__ = ["edge"]
 
@@ -344,6 +385,121 @@ class ExpressionUnrecognizedID(Error):
         if isinstance(other, ExpressionUnrecognizedID):
             return self._id == other._id
         return False
+
+
+class FeelSyntaxError(Error):
+    __slots__ = ["msg"]
+
+    def __init__(self, msg: str) -> None:
+        super().__init__()
+        self.msg = msg
+
+
+class FeelUnsupportedError(Error):
+    __slots__ = ["construct", "line", "column"]
+
+    def __init__(self, construct: str, line: int, column: int) -> None:
+        super().__init__()
+        self.construct = construct
+        self.line = line
+        self.column = column
+
+
+class FeelAssignTypeError(Error):
+    __slots__ = ["column", "line", "target", "target_type", "value_type"]
+
+    def __init__(
+        self, target: str, target_type: str, value_type: str, line: int, column: int
+    ) -> None:
+        super().__init__()
+        self.target = target
+        self.target_type = target_type
+        self.value_type = value_type
+        self.line = line
+        self.column = column
+
+
+class FeelBehaviorTypeError(Error):
+    __slots__ = ["expr_type"]
+
+    def __init__(self, expr_type: str) -> None:
+        super().__init__()
+        self.expr_type = expr_type
+
+
+class FeelConditionTypeError(Error):
+    __slots__ = ["column", "expr_type", "line"]
+
+    def __init__(self, expr_type: str, line: int, column: int) -> None:
+        super().__init__()
+        self.expr_type = expr_type
+        self.line = line
+        self.column = column
+
+
+class FeelInvalidTargetError(Error):
+    __slots__ = ["column", "line", "name", "reason"]
+
+    def __init__(self, name: str, reason: str, line: int, column: int) -> None:
+        super().__init__()
+        self.name = name
+        self.reason = reason
+        self.line = line
+        self.column = column
+
+
+class FeelCbmcUnsupportedError(Error):
+    __slots__ = ["column", "construct", "line"]
+
+    def __init__(self, construct: str, line: int, column: int) -> None:
+        super().__init__()
+        self.construct = construct
+        self.line = line
+        self.column = column
+
+
+class FeelMixedTypesError(Error):
+    __slots__ = ["column", "construct", "line", "types"]
+
+    def __init__(
+        self, construct: str, types: tuple[str, ...], line: int, column: int
+    ) -> None:
+        super().__init__()
+        self.construct = construct
+        self.types = types
+        self.line = line
+        self.column = column
+
+
+class FeelNumberTypeError(Error):
+    __slots__ = ["column", "line", "literal"]
+
+    def __init__(self, literal: str, line: int, column: int) -> None:
+        super().__init__()
+        self.literal = literal
+        self.line = line
+        self.column = column
+
+
+class FeelOperatorTypeError(Error):
+    __slots__ = ["column", "line", "op", "types"]
+
+    def __init__(self, op: str, types: tuple[str, ...], line: int, column: int) -> None:
+        super().__init__()
+        self.op = op
+        self.types = types
+        self.line = line
+        self.column = column
+
+
+class FeelUnknownNameError(Error):
+    __slots__ = ["column", "line", "name"]
+
+    def __init__(self, name: str, line: int, column: int) -> None:
+        super().__init__()
+        self.name = name
+        self.line = line
+        self.column = column
 
 
 class FileReadFileError(Error):
@@ -664,6 +820,28 @@ def get_error_message(error: Error) -> str:
             return f"Task flow error: Task '{task_id}' should have at least one incoming and one outgoing flow."
         case BpmnUnrecognizedElement(element_name=element_name):
             return f"BPMN ERROR: Unrecognized bpmn element type in workflow: {element_name}"
+        case BpmnCbmcUnsupportedElementError(
+            element_id=element_id, element_type=element_type
+        ):
+            return f"BPMN ERROR: {element_type} '{element_id}' cannot be expressed in C for CBMC."
+        case CbmcBuildError(reason=reason):
+            return f"CBMC ERROR: Could not build C for CBMC: {reason}."
+        case CbmcAssertionError(failures=failures):
+            lines = ["CBMC ERROR: Assertion failed:"]
+            lines.append(f"{len(failures)} failure(s) occurred:")
+            for idx, failure in enumerate(failures):
+                lines.append(
+                    f"{idx + 1}: {failure['description']} (line {failure['line']})"
+                )
+            return "\n".join(lines)
+        case CbmcRunError(reason=reason):
+            return f"CBMC ERROR: Could not run CBMC: {reason}."
+        case CbmcUnreachableError(unreachable=unreachable):
+            lines = ["CBMC ERROR: Unreachable:"]
+            lines.append(f"{len(unreachable)} item(s) never reached by the workflow:")
+            for idx, item in enumerate(unreachable):
+                lines.append(f"{idx + 1}: {item}")
+            return "\n".join(lines)
         case CwpEdgeNoParentExprError(edge=edge):
             return f"CWP ERROR: Expression or parent node not found in edge. Edge details: {edge.attrib}."
         case CwpEdgeNoStateError(edge=edge):
@@ -696,6 +874,36 @@ def get_error_message(error: Error) -> str:
             return f"EXPR ERROR: sometiong of type '{_type}' cannot be used with a relational not"
         case ExpressionUnrecognizedID(_id=_id):
             return f"EXPR ERROR: '{_id}' is not recognized as a literal or something stored in the symbol table"
+        case FeelSyntaxError(msg=msg):
+            return f"FEEL SYNTAX ERROR: {msg}"
+        case FeelUnsupportedError(construct=construct, line=line, column=column):
+            return f"FEEL ERROR: {construct} (line {line}:{column}) is not supported; only numbers, booleans, names, lists, arithmetic, comparisons, logic, 'if', 'choose' and triples can be used"
+        case FeelCbmcUnsupportedError(construct=construct, line=line, column=column):
+            return f"FEEL ERROR: {construct} (line {line}:{column}) cannot be expressed in C for CBMC"
+        case FeelAssignTypeError(
+            target=target,
+            target_type=target_type,
+            value_type=value_type,
+            line=line,
+            column=column,
+        ):
+            return f"FEEL TYPE ERROR: (line {line}:{column}) '{target}' has type '{target_type}' and cannot be assigned a value of type '{value_type}'"
+        case FeelBehaviorTypeError(expr_type=expr_type):
+            return f"FEEL TYPE ERROR: a behavior must be a triple or a parenthesized list of triples, not something of type '{expr_type}'"
+        case FeelConditionTypeError(expr_type=expr_type, line=line, column=column):
+            return f"FEEL TYPE ERROR: (line {line}:{column}) a condition must be a bool, not '{expr_type}'"
+        case FeelInvalidTargetError(name=name, reason=reason, line=line, column=column):
+            return f"FEEL TYPE ERROR: (line {line}:{column}) '{name}' cannot be assigned: {reason}"
+        case FeelMixedTypesError(
+            construct=construct, types=types, line=line, column=column
+        ):
+            return f"FEEL TYPE ERROR: (line {line}:{column}) the items of {construct} must have compatible types, found {', '.join(types)}"
+        case FeelNumberTypeError(literal=literal, line=line, column=column):
+            return f"FEEL TYPE ERROR: (line {line}:{column}) '{literal}' is not an integer that fits in an int"
+        case FeelOperatorTypeError(op=op, types=types, line=line, column=column):
+            return f"FEEL TYPE ERROR: (line {line}:{column}) '{op}' cannot be applied to {', '.join(types)}"
+        case FeelUnknownNameError(name=name, line=line, column=column):
+            return f"FEEL TYPE ERROR: (line {line}:{column}) '{name}' is not a variable, constant or enum value"
         case FileReadFileError(msg=msg):
             return f"FILE ERROR: '{msg}'"
         case FileWriteFileError(msg=msg):
