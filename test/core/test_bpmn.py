@@ -1,13 +1,25 @@
 # type: ignore
+from pathlib import Path
 from xml.etree.ElementTree import Element, SubElement, tostring
 
+import pytest
 from defusedxml import ElementTree
 from returns.result import Failure, Success
 
 from bpmncwpverify.core.accessmethods.bpmnmethods import from_xml
-from bpmncwpverify.core.bpmn import BPMN_XML_NAMESPACE, StartEvent
-from bpmncwpverify.core.error import BpmnMissingEventsError
-from bpmncwpverify.core.state import StateBuilder
+from bpmncwpverify.core.bpmn import BPMN_XML_NAMESPACE, StartEvent, Task
+from bpmncwpverify.core.error import (
+    BpmnMissingEventsError,
+    BpmnNoElementNameError,
+    BpmnNoSwimLaneNameError,
+    FeelAssignTypeError,
+    FeelBehaviorTypeError,
+    FeelConditionTypeError,
+    FeelSyntaxError,
+    FeelUnsupportedError,
+)
+from bpmncwpverify.core.feel_tree import BinaryOp, Name, Number, TripleList
+from bpmncwpverify.core.state import State, StateBuilder
 
 
 def create_bpmn_definition():
@@ -130,3 +142,151 @@ def test_from_xml(mocker):
     assert isinstance(start_event, StartEvent)
     assert start_event.message_event_definition == "test mock msg event def"
     assert start_event.message_timer_definition is None
+
+
+RESOURCES = Path(__file__).parent.parent / "resources"
+
+DOOR_STATE = """
+enum Door {open closed}
+enum Light {on off}
+
+var door: Door = closed
+var light: Light = off
+var count: byte = 0
+"""
+
+
+def door_workflow(behavior, condition):
+    """start -> task -> exclusive gateway -> end (flow carries the condition)"""
+    root, collab = create_bpmn_definition()
+    add_process(collab)
+    start = Element("bpmn:startEvent", attrib={"id": "start", "name": "Start"})
+    task = Element("bpmn:task", attrib={"id": "task", "name": "Task"})
+    SubElement(task, "bpmn:documentation").text = behavior
+    gateway = Element("bpmn:exclusiveGateway", attrib={"id": "gate", "name": "Gate"})
+    end = Element("bpmn:endEvent", attrib={"id": "end", "name": "End"})
+    flows = [
+        Element(
+            "bpmn:sequenceFlow",
+            attrib={"id": "f1", "sourceRef": "start", "targetRef": "task"},
+        ),
+        Element(
+            "bpmn:sequenceFlow",
+            attrib={"id": "f2", "sourceRef": "task", "targetRef": "gate"},
+        ),
+        Element(
+            "bpmn:sequenceFlow",
+            attrib={
+                "id": "f3",
+                "name": condition,
+                "sourceRef": "gate",
+                "targetRef": "end",
+            },
+        ),
+    ]
+    add_process_with_elements(root, [start, task, gateway, end, *flows])
+    return ElementTree.fromstring(tostring(root, encoding="unicode"))
+
+
+def test_workflow_with_feel_holds_feel_trees():
+    state = State.from_str(DOOR_STATE).unwrap()
+    behavior = "((light, [], choose [on, off]),\n(count, [count], count + 1))"
+    root = door_workflow(behavior, "door = open and count < 3")
+
+    bpmn = from_xml(root, state).unwrap()
+
+    process = bpmn.processes["Process_1"]
+    task = process.all_items()["task"]
+    assert isinstance(task.behavior_tree, TripleList)
+    assert [t.target for t in task.behavior_tree.triples] == ["light", "count"]
+    flow = process.get_flows()["f3"]
+    assert flow.expression == "door = open and count < 3"
+    assert flow.expression_tree == BinaryOp(
+        "and",
+        BinaryOp("=", Name("door"), Name("open")),
+        BinaryOp("<", Name("count"), Number(3)),
+    )
+
+
+@pytest.mark.parametrize(
+    "behavior, condition, error",
+    [
+        ("light off", "count < 3", FeelSyntaxError),
+        ("light = off", "count < 3", FeelBehaviorTypeError),
+        ("if\n:: true -> light = off\nfi", "count < 3", FeelUnsupportedError),
+        ("(door, [], 1)", "count < 3", FeelAssignTypeError),
+        ("(door, [], open)", "count == 3", FeelSyntaxError),
+        ("(door, [], open)", "count < 3 && door = open", FeelSyntaxError),
+        ("(door, [], open)", "count + 3", FeelConditionTypeError),
+    ],
+)
+def test_workflow_not_in_feel_fails_to_load_with_feel_error(behavior, condition, error):
+    state = State.from_str(DOOR_STATE).unwrap()
+
+    result = from_xml(door_workflow(behavior, condition), state)
+
+    assert isinstance(result, Failure)
+    assert isinstance(result.failure(), error)
+
+
+@pytest.mark.parametrize(
+    "folder, bpmn_file",
+    [
+        ("face2face", "workflow.bpmn"),
+        ("face2face", "face2face_open.bpmn"),
+        ("phware", "workflow_good.bpmn"),
+        ("simple_example", "simple_open.bpmn"),
+    ],
+)
+def test_feel_fixture_loads_with_feel_trees(folder, bpmn_file):
+    base = RESOURCES / "feel" / folder
+    state = State.from_str((base / "state.txt").read_text()).unwrap()
+
+    bpmn = from_xml(ElementTree.parse(base / bpmn_file).getroot(), state).unwrap()
+
+    items = [i for p in bpmn.processes.values() for i in p.all_items().values()]
+    flows = [f for p in bpmn.processes.values() for f in p.get_flows().values()]
+    tasks = [i for i in items if isinstance(i, Task)]
+    assert any(task.behavior_tree is not None for task in tasks)
+    assert all(bool(t.behavior.strip()) == (t.behavior_tree is not None) for t in tasks)
+    assert all(bool(f.expression) == (f.expression_tree is not None) for f in flows)
+
+
+@pytest.mark.parametrize(
+    "folder, bpmn_file",
+    [
+        ("face2face", "workflow.bpmn"),
+        ("phware", "workflow.bpmn"),
+        ("simple_example", "simple_open.bpmn"),
+    ],
+)
+def test_old_format_fixture_fails_to_load_with_feel_error(folder, bpmn_file):
+    base = RESOURCES / folder
+    state = State.from_str((base / "state.txt").read_text()).unwrap()
+
+    result = from_xml(ElementTree.parse(base / bpmn_file).getroot(), state)
+
+    assert isinstance(result, Failure)
+    assert isinstance(
+        result.failure(),
+        FeelSyntaxError | FeelUnsupportedError | FeelBehaviorTypeError,
+    )
+
+
+@pytest.mark.parametrize(
+    "folder, bpmn_file, error",
+    [
+        ("phware", "workflow.bpmn", BpmnNoElementNameError),
+        ("simple_example", "test_bpmn.bpmn", BpmnNoSwimLaneNameError),
+    ],
+)
+def test_feel_copy_of_invalid_fixture_still_gives_its_bpmn_error(
+    folder, bpmn_file, error
+):
+    base = RESOURCES / "feel" / folder
+    state = State.from_str((base / "state.txt").read_text()).unwrap()
+
+    result = from_xml(ElementTree.parse(base / bpmn_file).getroot(), state)
+
+    assert isinstance(result, Failure)
+    assert isinstance(result.failure(), error)

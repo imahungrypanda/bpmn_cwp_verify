@@ -2,7 +2,7 @@ from xml.etree.ElementTree import Element
 
 from returns.functions import not_
 from returns.pipeline import is_successful
-from returns.result import Failure, Result, Success
+from returns.result import Failure, Result
 
 from bpmncwpverify.builder.process_builder import ProcessBuilder
 from bpmncwpverify.core.bpmn import (
@@ -10,11 +10,9 @@ from bpmncwpverify.core.bpmn import (
     Node,
     Process,
     SequenceFlow,
-    Task,
     get_element_type,
 )
 from bpmncwpverify.core.error import Error
-from bpmncwpverify.core.feel import Feel
 from bpmncwpverify.core.state import State
 
 
@@ -24,20 +22,6 @@ def get_process_name(id: str, parts: list[Element]) -> str:
             return part.attrib.get("name", id)
 
     return id
-
-
-def parse_and_typecheck_optional_feel(
-    text: str | None, state: State
-) -> Result[str | Feel, Error]:
-    if not text:
-        return Success("")  # nothing to do
-
-    feel = Feel.parse(text)
-    type_result = feel.type_check(state)
-    if not is_successful(type_result):
-        return Failure(type_result.failure())
-
-    return Success(feel)
 
 
 def from_xml(
@@ -54,44 +38,12 @@ def from_xml(
     for sub_element in element:
         tag = sub_element.tag.partition("}")[2]
 
-        element_result = get_element_type(tag)
-        if not_(is_successful)(element_result):
-            return Failure(element_result.failure())
-        element_type: type[SequenceFlow] | type[Node] = element_result.unwrap()
+        result = get_element_type(tag)
+        if not_(is_successful)(result):
+            return Failure(result.failure())
+        element_type: type[SequenceFlow] | type[Node] = result.unwrap()
 
         class_object = element_type.from_xml(sub_element)
-
-        # expression
-        feel_result = parse_and_typecheck_optional_feel(
-            getattr(class_object, "expression", None), state
-        )
-        if not is_successful(feel_result):
-            return Failure(feel_result.failure())
-
-        parsed = feel_result.unwrap()
-        if (
-            parsed
-            and isinstance(parsed, Feel)
-            and isinstance(class_object, SequenceFlow)
-        ):
-            class_object.expression = parsed
-
-        # behavior
-        feel_result = parse_and_typecheck_optional_feel(
-            getattr(class_object, "behavior", None), state
-        )
-        if not is_successful(feel_result):
-            return Failure(feel_result.failure())
-
-        parsed = feel_result.unwrap()
-        if parsed and isinstance(parsed, Feel) and isinstance(class_object, Task):
-            class_object.behavior = parsed
-
-        # mainly to check if the Start Event is supported
-        verified_result = class_object.verify_element(sub_element, class_object.id)
-        if not_(is_successful)(verified_result):
-            return Failure(verified_result.failure())
-
         builder = builder.with_element(class_object)
 
     for seq_flow in element.findall("bpmn:sequenceFlow", BPMN_XML_NAMESPACE):
@@ -105,6 +57,8 @@ def from_xml(
             builder = result_builder.unwrap()
         else:
             return Failure(result_builder.failure())
+
+    builder = builder.with_boundary_events()
 
     builder = builder.with_boundary_events()
 

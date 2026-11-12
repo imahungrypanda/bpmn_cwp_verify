@@ -1,9 +1,26 @@
 # type: ignore
 import pytest
-from returns.result import Success
+from returns.result import Failure, Success
 
 from bpmncwpverify.builder.process_builder import ProcessBuilder
-from bpmncwpverify.core.bpmn import Node, SequenceFlow, Task
+from bpmncwpverify.core.bpmn import EndEvent, Node, SequenceFlow, StartEvent, Task
+from bpmncwpverify.core.error import (
+    FeelAssignTypeError,
+    FeelBehaviorTypeError,
+    FeelConditionTypeError,
+    FeelInvalidTargetError,
+    FeelOperatorTypeError,
+    FeelSyntaxError,
+    FeelUnknownNameError,
+    FeelUnsupportedError,
+)
+from bpmncwpverify.core.feel_tree import (
+    BinaryOp,
+    Name,
+    Number,
+    Triple,
+    TripleList,
+)
 from bpmncwpverify.core.state import State
 
 
@@ -74,39 +91,129 @@ def test_build_graph(mocker):
     assert node_1.in_flows == [flow_2]
 
 
-def test_build_graph_with_expression_checker(mocker):
-    mock_process = mocker.MagicMock()
+DOOR_STATE = """
+enum Door {open closed}
+enum Light {on off}
 
-    class MockNode(Node):
-        def __init__(self, id):
-            self.id = id
-            self.out_flows, self.in_flows = [], []
+var door: Door = closed
+var light: Light = off
+var count: byte = 0
+"""
 
-    node_1, node_2 = MockNode("node_1"), MockNode("node_2")
-    flow_1 = mocker.MagicMock(spec=SequenceFlow)
-    mock_process.__getitem__.side_effect = lambda key: {
-        "flow_1": flow_1,
-        "node_1": node_1,
-        "node_2": node_2,
-    }[key]
 
-    mock_state = mocker.MagicMock(spec=State)
-    mock_feel = mocker.MagicMock()
-    mock_feel.type_check.return_value = Success("bool")
+def _door_state() -> State:
+    return State.from_str(DOOR_STATE).unwrap()
 
-    mock_parse = mocker.patch(
-        "bpmncwpverify.builder.process_builder.Feel.parse",
-        return_value=mock_feel,
+
+def _two_nodes_builder() -> tuple[ProcessBuilder, SequenceFlow]:
+    builder = ProcessBuilder("p", "p", _door_state())
+    flow = SequenceFlow("flow_1", "flow_1")
+    builder.with_element(StartEvent("node_1", "node_1", "", ""))
+    builder.with_element(EndEvent("node_2", "node_2", "", ""))
+    builder.with_element(flow)
+    return builder, flow
+
+
+def test_flow_condition_is_parsed_and_stored_as_feel():
+    builder, flow = _two_nodes_builder()
+
+    result = builder.with_process_flow(
+        "flow_1", "node_1", "node_2", "door = open and count < 3"
     )
 
-    builder = ProcessBuilder("test_id", "test_name", mock_state)
-    builder._process = mock_process
+    assert isinstance(result, Success)
+    assert flow.expression == "door = open and count < 3"
+    assert flow.expression_tree == BinaryOp(
+        "and",
+        BinaryOp("=", Name("door"), Name("open")),
+        BinaryOp("<", Name("count"), Number(3)),
+    )
 
-    builder.with_process_flow("flow_1", "node_1", "node_2", "clean_expression")
 
-    mock_parse.assert_called_once_with("clean_expression")
-    mock_feel.type_check.assert_called_once_with(mock_state)
-    assert flow_1.expression is mock_feel
+def test_flow_without_condition_has_no_tree():
+    builder, flow = _two_nodes_builder()
+
+    builder.with_process_flow("flow_1", "node_1", "node_2", "")
+
+    assert flow.expression_tree is None
+
+
+@pytest.mark.parametrize(
+    "expression, error",
+    [
+        ("door == open && count < 3", FeelSyntaxError),
+        ("count < 3 || door = open", FeelSyntaxError),
+        ("for i in [1, 2] return i", FeelUnsupportedError),
+        ("count + 1", FeelConditionTypeError),
+        ("door = 1", FeelOperatorTypeError),
+        ("nothing = 1", FeelUnknownNameError),
+    ],
+)
+def test_bad_flow_condition_fails_with_feel_error(expression, error):
+    builder, flow = _two_nodes_builder()
+
+    result = builder.with_process_flow("flow_1", "node_1", "node_2", expression)
+
+    assert isinstance(result, Failure)
+    assert isinstance(result.failure(), error)
+    assert flow.expression_tree is None
+
+
+def _linear_builder(behavior: str) -> tuple[ProcessBuilder, Task]:
+    builder = ProcessBuilder("p", "p", _door_state())
+    task = Task("task", "task", behavior)
+    builder.with_element(StartEvent("start", "start", "", ""))
+    builder.with_element(task)
+    builder.with_element(EndEvent("end", "end", "", ""))
+    builder.with_element(SequenceFlow("f1", "f1"))
+    builder.with_element(SequenceFlow("f2", "f2"))
+    builder.with_process_flow("f1", "start", "task", "").unwrap()
+    builder.with_process_flow("f2", "task", "end", "").unwrap()
+    return builder, task
+
+
+def test_task_behavior_is_parsed_and_stored_as_feel():
+    builder, task = _linear_builder("(door, [], open)")
+
+    assert isinstance(builder.build(), Success)
+    assert task.behavior_tree == Triple("door", (), Name("open"))
+
+
+def test_task_behavior_triple_list_is_stored_as_feel():
+    builder, task = _linear_builder(
+        "((light, [], choose [on, off]),\n(count, [count], count + 1))"
+    )
+
+    assert isinstance(builder.build(), Success)
+    assert isinstance(task.behavior_tree, TripleList)
+    assert [t.target for t in task.behavior_tree.triples] == ["light", "count"]
+
+
+def test_task_without_behavior_has_no_tree():
+    builder, task = _linear_builder("")
+
+    assert isinstance(builder.build(), Success)
+    assert task.behavior_tree is None
+
+
+@pytest.mark.parametrize(
+    "behavior, error",
+    [
+        ("door = open", FeelBehaviorTypeError),
+        ("count = count + 1", FeelBehaviorTypeError),
+        ("if\n:: true -> door = open\nfi", FeelUnsupportedError),
+        ("(door, [], 1)", FeelAssignTypeError),
+        ("(nothing, [], 1)", FeelInvalidTargetError),
+    ],
+)
+def test_bad_task_behavior_fails_with_feel_error(behavior, error):
+    builder, task = _linear_builder(behavior)
+
+    result = builder.build()
+
+    assert isinstance(result, Failure)
+    assert isinstance(result.failure(), error)
+    assert task.behavior_tree is None
 
 
 @pytest.fixture

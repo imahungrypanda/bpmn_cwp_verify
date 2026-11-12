@@ -1,5 +1,6 @@
 # Generated from antlr/Expr.g4 by ANTLR 4.13.2
 # encoding: utf-8
+# type: ignore
 from antlr4 import *
 from io import StringIO
 import sys
@@ -10,39 +11,36 @@ else:
 
 def serializedATN():
     return [
-        4,1,20,107,2,0,7,0,2,1,7,1,2,2,7,2,2,3,7,3,2,4,7,4,2,5,7,5,2,6,7,
-        6,2,7,7,7,2,8,7,8,2,9,7,9,2,10,7,10,1,0,1,0,1,0,1,1,1,1,1,2,1,2,
-        1,2,1,2,1,2,1,2,5,2,34,8,2,10,2,12,2,37,9,2,1,3,1,3,1,3,1,3,1,3,
-        1,3,5,3,45,8,3,10,3,12,3,48,9,3,1,4,1,4,1,4,3,4,53,8,4,1,5,1,5,1,
-        5,1,5,1,5,1,5,5,5,61,8,5,10,5,12,5,64,9,5,1,6,1,6,1,6,1,6,1,6,1,
-        6,5,6,72,8,6,10,6,12,6,75,9,6,1,7,1,7,1,7,1,7,1,7,1,7,5,7,83,8,7,
-        10,7,12,7,86,9,7,1,8,1,8,1,8,3,8,91,8,8,1,9,1,9,1,9,1,9,1,9,3,9,
-        98,8,9,1,10,1,10,1,10,1,10,1,10,3,10,105,8,10,1,10,0,5,4,6,10,12,
-        14,11,0,2,4,6,8,10,12,14,16,18,20,0,3,1,0,4,9,1,0,10,11,1,0,12,14,
-        104,0,22,1,0,0,0,2,25,1,0,0,0,4,27,1,0,0,0,6,38,1,0,0,0,8,52,1,0,
-        0,0,10,54,1,0,0,0,12,65,1,0,0,0,14,76,1,0,0,0,16,90,1,0,0,0,18,97,
-        1,0,0,0,20,104,1,0,0,0,22,23,3,2,1,0,23,24,5,0,0,1,24,1,1,0,0,0,
-        25,26,3,4,2,0,26,3,1,0,0,0,27,28,6,2,-1,0,28,29,3,6,3,0,29,35,1,
-        0,0,0,30,31,10,2,0,0,31,32,5,1,0,0,32,34,3,6,3,0,33,30,1,0,0,0,34,
-        37,1,0,0,0,35,33,1,0,0,0,35,36,1,0,0,0,36,5,1,0,0,0,37,35,1,0,0,
-        0,38,39,6,3,-1,0,39,40,3,8,4,0,40,46,1,0,0,0,41,42,10,2,0,0,42,43,
-        5,2,0,0,43,45,3,8,4,0,44,41,1,0,0,0,45,48,1,0,0,0,46,44,1,0,0,0,
-        46,47,1,0,0,0,47,7,1,0,0,0,48,46,1,0,0,0,49,50,5,3,0,0,50,53,3,8,
-        4,0,51,53,3,10,5,0,52,49,1,0,0,0,52,51,1,0,0,0,53,9,1,0,0,0,54,55,
-        6,5,-1,0,55,56,3,12,6,0,56,62,1,0,0,0,57,58,10,2,0,0,58,59,7,0,0,
-        0,59,61,3,12,6,0,60,57,1,0,0,0,61,64,1,0,0,0,62,60,1,0,0,0,62,63,
-        1,0,0,0,63,11,1,0,0,0,64,62,1,0,0,0,65,66,6,6,-1,0,66,67,3,14,7,
-        0,67,73,1,0,0,0,68,69,10,2,0,0,69,70,7,1,0,0,70,72,3,14,7,0,71,68,
-        1,0,0,0,72,75,1,0,0,0,73,71,1,0,0,0,73,74,1,0,0,0,74,13,1,0,0,0,
-        75,73,1,0,0,0,76,77,6,7,-1,0,77,78,3,16,8,0,78,84,1,0,0,0,79,80,
-        10,2,0,0,80,81,7,2,0,0,81,83,3,16,8,0,82,79,1,0,0,0,83,86,1,0,0,
-        0,84,82,1,0,0,0,84,85,1,0,0,0,85,15,1,0,0,0,86,84,1,0,0,0,87,88,
-        5,11,0,0,88,91,3,16,8,0,89,91,3,18,9,0,90,87,1,0,0,0,90,89,1,0,0,
-        0,91,17,1,0,0,0,92,93,5,19,0,0,93,94,5,15,0,0,94,95,5,19,0,0,95,
-        98,5,16,0,0,96,98,3,20,10,0,97,92,1,0,0,0,97,96,1,0,0,0,98,19,1,
-        0,0,0,99,105,5,19,0,0,100,101,5,17,0,0,101,102,3,2,1,0,102,103,5,
-        18,0,0,103,105,1,0,0,0,104,99,1,0,0,0,104,100,1,0,0,0,105,21,1,0,
-        0,0,9,35,46,52,62,73,84,90,97,104
+        4,1,18,98,2,0,7,0,2,1,7,1,2,2,7,2,2,3,7,3,2,4,7,4,2,5,7,5,2,6,7,
+        6,2,7,7,7,2,8,7,8,2,9,7,9,1,0,1,0,1,0,1,1,1,1,1,2,1,2,1,2,1,2,1,
+        2,1,2,5,2,32,8,2,10,2,12,2,35,9,2,1,3,1,3,1,3,1,3,1,3,1,3,5,3,43,
+        8,3,10,3,12,3,46,9,3,1,4,1,4,1,4,3,4,51,8,4,1,5,1,5,1,5,1,5,1,5,
+        1,5,5,5,59,8,5,10,5,12,5,62,9,5,1,6,1,6,1,6,1,6,1,6,1,6,5,6,70,8,
+        6,10,6,12,6,73,9,6,1,7,1,7,1,7,1,7,1,7,1,7,5,7,81,8,7,10,7,12,7,
+        84,9,7,1,8,1,8,1,8,3,8,89,8,8,1,9,1,9,1,9,1,9,1,9,3,9,96,8,9,1,9,
+        0,5,4,6,10,12,14,10,0,2,4,6,8,10,12,14,16,18,0,3,1,0,4,9,1,0,10,
+        11,1,0,12,14,95,0,20,1,0,0,0,2,23,1,0,0,0,4,25,1,0,0,0,6,36,1,0,
+        0,0,8,50,1,0,0,0,10,52,1,0,0,0,12,63,1,0,0,0,14,74,1,0,0,0,16,88,
+        1,0,0,0,18,95,1,0,0,0,20,21,3,2,1,0,21,22,5,0,0,1,22,1,1,0,0,0,23,
+        24,3,4,2,0,24,3,1,0,0,0,25,26,6,2,-1,0,26,27,3,6,3,0,27,33,1,0,0,
+        0,28,29,10,2,0,0,29,30,5,1,0,0,30,32,3,6,3,0,31,28,1,0,0,0,32,35,
+        1,0,0,0,33,31,1,0,0,0,33,34,1,0,0,0,34,5,1,0,0,0,35,33,1,0,0,0,36,
+        37,6,3,-1,0,37,38,3,8,4,0,38,44,1,0,0,0,39,40,10,2,0,0,40,41,5,2,
+        0,0,41,43,3,8,4,0,42,39,1,0,0,0,43,46,1,0,0,0,44,42,1,0,0,0,44,45,
+        1,0,0,0,45,7,1,0,0,0,46,44,1,0,0,0,47,48,5,3,0,0,48,51,3,8,4,0,49,
+        51,3,10,5,0,50,47,1,0,0,0,50,49,1,0,0,0,51,9,1,0,0,0,52,53,6,5,-1,
+        0,53,54,3,12,6,0,54,60,1,0,0,0,55,56,10,2,0,0,56,57,7,0,0,0,57,59,
+        3,12,6,0,58,55,1,0,0,0,59,62,1,0,0,0,60,58,1,0,0,0,60,61,1,0,0,0,
+        61,11,1,0,0,0,62,60,1,0,0,0,63,64,6,6,-1,0,64,65,3,14,7,0,65,71,
+        1,0,0,0,66,67,10,2,0,0,67,68,7,1,0,0,68,70,3,14,7,0,69,66,1,0,0,
+        0,70,73,1,0,0,0,71,69,1,0,0,0,71,72,1,0,0,0,72,13,1,0,0,0,73,71,
+        1,0,0,0,74,75,6,7,-1,0,75,76,3,16,8,0,76,82,1,0,0,0,77,78,10,2,0,
+        0,78,79,7,2,0,0,79,81,3,16,8,0,80,77,1,0,0,0,81,84,1,0,0,0,82,80,
+        1,0,0,0,82,83,1,0,0,0,83,15,1,0,0,0,84,82,1,0,0,0,85,86,5,11,0,0,
+        86,89,3,16,8,0,87,89,3,18,9,0,88,85,1,0,0,0,88,87,1,0,0,0,89,17,
+        1,0,0,0,90,96,5,17,0,0,91,92,5,15,0,0,92,93,3,2,1,0,93,94,5,16,0,
+        0,94,96,1,0,0,0,95,90,1,0,0,0,95,91,1,0,0,0,96,19,1,0,0,0,8,33,44,
+        50,60,71,82,88,95
     ]
 
 class ExprParser ( Parser ):
@@ -56,14 +54,14 @@ class ExprParser ( Parser ):
     sharedContextCache = PredictionContextCache()
 
     literalNames = [ "<INVALID>", "'||'", "'&&'", "'!'", "'<'", "'<='", 
-                     "'=='", "'!='", "'>'", "'>='", "'+'", "'-'", "'*'", 
-                     "'/'", "'%'", "'['", "']'", "'('", "')'" ]
+                     "'!='", "'=='", "'>'", "'>='", "'+'", "'-'", "'*'", 
+                     "'/'", "'%'", "'('", "')'" ]
 
     symbolicNames = [ "<INVALID>", "<INVALID>", "<INVALID>", "<INVALID>", 
                       "<INVALID>", "<INVALID>", "<INVALID>", "<INVALID>", 
                       "<INVALID>", "<INVALID>", "<INVALID>", "<INVALID>", 
                       "<INVALID>", "<INVALID>", "<INVALID>", "<INVALID>", 
-                      "<INVALID>", "<INVALID>", "<INVALID>", "ID", "WS" ]
+                      "<INVALID>", "ID", "WS" ]
 
     RULE_start = 0
     RULE_expr = 1
@@ -74,12 +72,10 @@ class ExprParser ( Parser ):
     RULE_addSubExpr = 6
     RULE_mulDivExpr = 7
     RULE_unaryExpr = 8
-    RULE_postfixExpr = 9
-    RULE_atom = 10
+    RULE_atom = 9
 
     ruleNames =  [ "start", "expr", "orExpr", "andExpr", "notExpr", "relExpr", 
-                   "addSubExpr", "mulDivExpr", "unaryExpr", "postfixExpr", 
-                   "atom" ]
+                   "addSubExpr", "mulDivExpr", "unaryExpr", "atom" ]
 
     EOF = Token.EOF
     T__0=1
@@ -98,10 +94,8 @@ class ExprParser ( Parser ):
     T__13=14
     T__14=15
     T__15=16
-    T__16=17
-    T__17=18
-    ID=19
-    WS=20
+    ID=17
+    WS=18
 
     def __init__(self, input:TokenStream, output:TextIO = sys.stdout):
         super().__init__(input, output)
@@ -146,9 +140,9 @@ class ExprParser ( Parser ):
         self.enterRule(localctx, 0, self.RULE_start)
         try:
             self.enterOuterAlt(localctx, 1)
-            self.state = 22
+            self.state = 20
             self.expr()
-            self.state = 23
+            self.state = 21
             self.match(ExprParser.EOF)
         except RecognitionException as re:
             localctx.exception = re
@@ -190,7 +184,7 @@ class ExprParser ( Parser ):
         self.enterRule(localctx, 2, self.RULE_expr)
         try:
             self.enterOuterAlt(localctx, 1)
-            self.state = 25
+            self.state = 23
             self.orExpr(0)
         except RecognitionException as re:
             localctx.exception = re
@@ -272,10 +266,10 @@ class ExprParser ( Parser ):
             self._ctx = localctx
             _prevctx = localctx
 
-            self.state = 28
+            self.state = 26
             self.andExpr(0)
             self._ctx.stop = self._input.LT(-1)
-            self.state = 35
+            self.state = 33
             self._errHandler.sync(self)
             _alt = self._interp.adaptivePredict(self._input,0,self._ctx)
             while _alt!=2 and _alt!=ATN.INVALID_ALT_NUMBER:
@@ -285,15 +279,15 @@ class ExprParser ( Parser ):
                     _prevctx = localctx
                     localctx = ExprParser.OrContext(self, ExprParser.OrExprContext(self, _parentctx, _parentState))
                     self.pushNewRecursionContext(localctx, _startState, self.RULE_orExpr)
-                    self.state = 30
+                    self.state = 28
                     if not self.precpred(self._ctx, 2):
                         from antlr4.error.Errors import FailedPredicateException
                         raise FailedPredicateException(self, "self.precpred(self._ctx, 2)")
-                    self.state = 31
+                    self.state = 29
                     self.match(ExprParser.T__0)
-                    self.state = 32
+                    self.state = 30
                     self.andExpr(0) 
-                self.state = 37
+                self.state = 35
                 self._errHandler.sync(self)
                 _alt = self._interp.adaptivePredict(self._input,0,self._ctx)
 
@@ -377,10 +371,10 @@ class ExprParser ( Parser ):
             self._ctx = localctx
             _prevctx = localctx
 
-            self.state = 39
+            self.state = 37
             self.notExpr()
             self._ctx.stop = self._input.LT(-1)
-            self.state = 46
+            self.state = 44
             self._errHandler.sync(self)
             _alt = self._interp.adaptivePredict(self._input,1,self._ctx)
             while _alt!=2 and _alt!=ATN.INVALID_ALT_NUMBER:
@@ -390,15 +384,15 @@ class ExprParser ( Parser ):
                     _prevctx = localctx
                     localctx = ExprParser.AndContext(self, ExprParser.AndExprContext(self, _parentctx, _parentState))
                     self.pushNewRecursionContext(localctx, _startState, self.RULE_andExpr)
-                    self.state = 41
+                    self.state = 39
                     if not self.precpred(self._ctx, 2):
                         from antlr4.error.Errors import FailedPredicateException
                         raise FailedPredicateException(self, "self.precpred(self._ctx, 2)")
-                    self.state = 42
+                    self.state = 40
                     self.match(ExprParser.T__1)
-                    self.state = 43
+                    self.state = 41
                     self.notExpr() 
-                self.state = 48
+                self.state = 46
                 self._errHandler.sync(self)
                 _alt = self._interp.adaptivePredict(self._input,1,self._ctx)
 
@@ -472,21 +466,21 @@ class ExprParser ( Parser ):
         localctx = ExprParser.NotExprContext(self, self._ctx, self.state)
         self.enterRule(localctx, 8, self.RULE_notExpr)
         try:
-            self.state = 52
+            self.state = 50
             self._errHandler.sync(self)
             token = self._input.LA(1)
             if token in [3]:
                 localctx = ExprParser.NotContext(self, localctx)
                 self.enterOuterAlt(localctx, 1)
-                self.state = 49
+                self.state = 47
                 self.match(ExprParser.T__2)
-                self.state = 50
+                self.state = 48
                 self.notExpr()
                 pass
-            elif token in [11, 17, 19]:
+            elif token in [11, 15, 17]:
                 localctx = ExprParser.ToRelContext(self, localctx)
                 self.enterOuterAlt(localctx, 2)
-                self.state = 51
+                self.state = 49
                 self.relExpr(0)
                 pass
             else:
@@ -574,10 +568,10 @@ class ExprParser ( Parser ):
             self._ctx = localctx
             _prevctx = localctx
 
-            self.state = 55
+            self.state = 53
             self.addSubExpr(0)
             self._ctx.stop = self._input.LT(-1)
-            self.state = 62
+            self.state = 60
             self._errHandler.sync(self)
             _alt = self._interp.adaptivePredict(self._input,3,self._ctx)
             while _alt!=2 and _alt!=ATN.INVALID_ALT_NUMBER:
@@ -587,11 +581,11 @@ class ExprParser ( Parser ):
                     _prevctx = localctx
                     localctx = ExprParser.RelationalContext(self, ExprParser.RelExprContext(self, _parentctx, _parentState))
                     self.pushNewRecursionContext(localctx, _startState, self.RULE_relExpr)
-                    self.state = 57
+                    self.state = 55
                     if not self.precpred(self._ctx, 2):
                         from antlr4.error.Errors import FailedPredicateException
                         raise FailedPredicateException(self, "self.precpred(self._ctx, 2)")
-                    self.state = 58
+                    self.state = 56
                     localctx.op = self._input.LT(1)
                     _la = self._input.LA(1)
                     if not((((_la) & ~0x3f) == 0 and ((1 << _la) & 1008) != 0)):
@@ -599,9 +593,9 @@ class ExprParser ( Parser ):
                     else:
                         self._errHandler.reportMatch(self)
                         self.consume()
-                    self.state = 59
+                    self.state = 57
                     self.addSubExpr(0) 
-                self.state = 64
+                self.state = 62
                 self._errHandler.sync(self)
                 _alt = self._interp.adaptivePredict(self._input,3,self._ctx)
 
@@ -687,10 +681,10 @@ class ExprParser ( Parser ):
             self._ctx = localctx
             _prevctx = localctx
 
-            self.state = 66
+            self.state = 64
             self.mulDivExpr(0)
             self._ctx.stop = self._input.LT(-1)
-            self.state = 73
+            self.state = 71
             self._errHandler.sync(self)
             _alt = self._interp.adaptivePredict(self._input,4,self._ctx)
             while _alt!=2 and _alt!=ATN.INVALID_ALT_NUMBER:
@@ -700,11 +694,11 @@ class ExprParser ( Parser ):
                     _prevctx = localctx
                     localctx = ExprParser.AddSubContext(self, ExprParser.AddSubExprContext(self, _parentctx, _parentState))
                     self.pushNewRecursionContext(localctx, _startState, self.RULE_addSubExpr)
-                    self.state = 68
+                    self.state = 66
                     if not self.precpred(self._ctx, 2):
                         from antlr4.error.Errors import FailedPredicateException
                         raise FailedPredicateException(self, "self.precpred(self._ctx, 2)")
-                    self.state = 69
+                    self.state = 67
                     localctx.op = self._input.LT(1)
                     _la = self._input.LA(1)
                     if not(_la==10 or _la==11):
@@ -712,9 +706,9 @@ class ExprParser ( Parser ):
                     else:
                         self._errHandler.reportMatch(self)
                         self.consume()
-                    self.state = 70
+                    self.state = 68
                     self.mulDivExpr(0) 
-                self.state = 75
+                self.state = 73
                 self._errHandler.sync(self)
                 _alt = self._interp.adaptivePredict(self._input,4,self._ctx)
 
@@ -800,10 +794,10 @@ class ExprParser ( Parser ):
             self._ctx = localctx
             _prevctx = localctx
 
-            self.state = 77
+            self.state = 75
             self.unaryExpr()
             self._ctx.stop = self._input.LT(-1)
-            self.state = 84
+            self.state = 82
             self._errHandler.sync(self)
             _alt = self._interp.adaptivePredict(self._input,5,self._ctx)
             while _alt!=2 and _alt!=ATN.INVALID_ALT_NUMBER:
@@ -813,11 +807,11 @@ class ExprParser ( Parser ):
                     _prevctx = localctx
                     localctx = ExprParser.MulDivContext(self, ExprParser.MulDivExprContext(self, _parentctx, _parentState))
                     self.pushNewRecursionContext(localctx, _startState, self.RULE_mulDivExpr)
-                    self.state = 79
+                    self.state = 77
                     if not self.precpred(self._ctx, 2):
                         from antlr4.error.Errors import FailedPredicateException
                         raise FailedPredicateException(self, "self.precpred(self._ctx, 2)")
-                    self.state = 80
+                    self.state = 78
                     localctx.op = self._input.LT(1)
                     _la = self._input.LA(1)
                     if not((((_la) & ~0x3f) == 0 and ((1 << _la) & 28672) != 0)):
@@ -825,9 +819,9 @@ class ExprParser ( Parser ):
                     else:
                         self._errHandler.reportMatch(self)
                         self.consume()
-                    self.state = 81
+                    self.state = 79
                     self.unaryExpr() 
-                self.state = 86
+                self.state = 84
                 self._errHandler.sync(self)
                 _alt = self._interp.adaptivePredict(self._input,5,self._ctx)
 
@@ -857,25 +851,6 @@ class ExprParser ( Parser ):
 
 
 
-    class ToPostfixContext(UnaryExprContext):
-
-        def __init__(self, parser, ctx:ParserRuleContext): # actually a ExprParser.UnaryExprContext
-            super().__init__(parser)
-            self.copyFrom(ctx)
-
-        def postfixExpr(self):
-            return self.getTypedRuleContext(ExprParser.PostfixExprContext,0)
-
-
-        def enterRule(self, listener:ParseTreeListener):
-            if hasattr( listener, "enterToPostfix" ):
-                listener.enterToPostfix(self)
-
-        def exitRule(self, listener:ParseTreeListener):
-            if hasattr( listener, "exitToPostfix" ):
-                listener.exitToPostfix(self)
-
-
     class NegateContext(UnaryExprContext):
 
         def __init__(self, parser, ctx:ParserRuleContext): # actually a ExprParser.UnaryExprContext
@@ -895,82 +870,9 @@ class ExprParser ( Parser ):
                 listener.exitNegate(self)
 
 
+    class ToAtomContext(UnaryExprContext):
 
-    def unaryExpr(self):
-
-        localctx = ExprParser.UnaryExprContext(self, self._ctx, self.state)
-        self.enterRule(localctx, 16, self.RULE_unaryExpr)
-        try:
-            self.state = 90
-            self._errHandler.sync(self)
-            token = self._input.LA(1)
-            if token in [11]:
-                localctx = ExprParser.NegateContext(self, localctx)
-                self.enterOuterAlt(localctx, 1)
-                self.state = 87
-                self.match(ExprParser.T__10)
-                self.state = 88
-                self.unaryExpr()
-                pass
-            elif token in [17, 19]:
-                localctx = ExprParser.ToPostfixContext(self, localctx)
-                self.enterOuterAlt(localctx, 2)
-                self.state = 89
-                self.postfixExpr()
-                pass
-            else:
-                raise NoViableAltException(self)
-
-        except RecognitionException as re:
-            localctx.exception = re
-            self._errHandler.reportError(self, re)
-            self._errHandler.recover(self, re)
-        finally:
-            self.exitRule()
-        return localctx
-
-
-    class PostfixExprContext(ParserRuleContext):
-        __slots__ = 'parser'
-
-        def __init__(self, parser, parent:ParserRuleContext=None, invokingState:int=-1):
-            super().__init__(parent, invokingState)
-            self.parser = parser
-
-
-        def getRuleIndex(self):
-            return ExprParser.RULE_postfixExpr
-
-     
-        def copyFrom(self, ctx:ParserRuleContext):
-            super().copyFrom(ctx)
-
-
-
-    class ArrayAccessContext(PostfixExprContext):
-
-        def __init__(self, parser, ctx:ParserRuleContext): # actually a ExprParser.PostfixExprContext
-            super().__init__(parser)
-            self.copyFrom(ctx)
-
-        def ID(self, i:int=None):
-            if i is None:
-                return self.getTokens(ExprParser.ID)
-            else:
-                return self.getToken(ExprParser.ID, i)
-
-        def enterRule(self, listener:ParseTreeListener):
-            if hasattr( listener, "enterArrayAccess" ):
-                listener.enterArrayAccess(self)
-
-        def exitRule(self, listener:ParseTreeListener):
-            if hasattr( listener, "exitArrayAccess" ):
-                listener.exitArrayAccess(self)
-
-
-    class ToAtomContext(PostfixExprContext):
-
-        def __init__(self, parser, ctx:ParserRuleContext): # actually a ExprParser.PostfixExprContext
+        def __init__(self, parser, ctx:ParserRuleContext): # actually a ExprParser.UnaryExprContext
             super().__init__(parser)
             self.copyFrom(ctx)
 
@@ -988,34 +890,30 @@ class ExprParser ( Parser ):
 
 
 
-    def postfixExpr(self):
+    def unaryExpr(self):
 
-        localctx = ExprParser.PostfixExprContext(self, self._ctx, self.state)
-        self.enterRule(localctx, 18, self.RULE_postfixExpr)
+        localctx = ExprParser.UnaryExprContext(self, self._ctx, self.state)
+        self.enterRule(localctx, 16, self.RULE_unaryExpr)
         try:
-            self.state = 97
+            self.state = 88
             self._errHandler.sync(self)
-            la_ = self._interp.adaptivePredict(self._input,7,self._ctx)
-            if la_ == 1:
-                localctx = ExprParser.ArrayAccessContext(self, localctx)
+            token = self._input.LA(1)
+            if token in [11]:
+                localctx = ExprParser.NegateContext(self, localctx)
                 self.enterOuterAlt(localctx, 1)
-                self.state = 92
-                self.match(ExprParser.ID)
-                self.state = 93
-                self.match(ExprParser.T__14)
-                self.state = 94
-                self.match(ExprParser.ID)
-                self.state = 95
-                self.match(ExprParser.T__15)
+                self.state = 85
+                self.match(ExprParser.T__10)
+                self.state = 86
+                self.unaryExpr()
                 pass
-
-            elif la_ == 2:
+            elif token in [15, 17]:
                 localctx = ExprParser.ToAtomContext(self, localctx)
                 self.enterOuterAlt(localctx, 2)
-                self.state = 96
+                self.state = 87
                 self.atom()
                 pass
-
+            else:
+                raise NoViableAltException(self)
 
         except RecognitionException as re:
             localctx.exception = re
@@ -1084,26 +982,26 @@ class ExprParser ( Parser ):
     def atom(self):
 
         localctx = ExprParser.AtomContext(self, self._ctx, self.state)
-        self.enterRule(localctx, 20, self.RULE_atom)
+        self.enterRule(localctx, 18, self.RULE_atom)
         try:
-            self.state = 104
+            self.state = 95
             self._errHandler.sync(self)
             token = self._input.LA(1)
-            if token in [19]:
+            if token in [17]:
                 localctx = ExprParser.IDContext(self, localctx)
                 self.enterOuterAlt(localctx, 1)
-                self.state = 99
+                self.state = 90
                 self.match(ExprParser.ID)
                 pass
-            elif token in [17]:
+            elif token in [15]:
                 localctx = ExprParser.ParensContext(self, localctx)
                 self.enterOuterAlt(localctx, 2)
-                self.state = 100
-                self.match(ExprParser.T__16)
-                self.state = 101
+                self.state = 91
+                self.match(ExprParser.T__14)
+                self.state = 92
                 self.expr()
-                self.state = 102
-                self.match(ExprParser.T__17)
+                self.state = 93
+                self.match(ExprParser.T__15)
                 pass
             else:
                 raise NoViableAltException(self)

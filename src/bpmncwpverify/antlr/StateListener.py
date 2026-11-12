@@ -1,4 +1,4 @@
-# Generated from antlr/State.g4 by ANTLR 4.13.2
+# Generated from antlr/State.g4 by ANTLR 4.13.1
 from antlr4 import *
 if "." in __name__:
     from .StateParser import StateParser
@@ -50,15 +50,6 @@ class StateListener(ParseTreeListener):
 
     # Exit a parse tree produced by StateParser#var_decl.
     def exitVar_decl(self, ctx:StateParser.Var_declContext):
-        pass
-
-
-    # Enter a parse tree produced by StateParser#array_decl.
-    def enterArray_decl(self, ctx:StateParser.Array_declContext):
-        pass
-
-    # Exit a parse tree produced by StateParser#array_decl.
-    def exitArray_decl(self, ctx:StateParser.Array_declContext):
         pass
 
 

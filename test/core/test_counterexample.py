@@ -17,8 +17,6 @@ def test_generate_counter_example(mocker):
     mocker.patch(
         "bpmncwpverify.core.counterexample.subprocess.run", return_value=spin_output
     )
-    mocker.patch("bpmncwpverify.core.counterexample.os.path.dirname")
-    mocker.patch("bpmncwpverify.core.counterexample.os.path.basename")
     mock_filter_spin_trace = mocker.patch(
         "bpmncwpverify.core.counterexample.CounterExample.filter_spin_trace"
     )
@@ -78,4 +76,4 @@ def test_counterexample_extract_steps(mocker):
     assert len(steps) == 1
     assert steps[0].id == "start"
     assert steps[0].changed_vars == ["test_var1", "test_var2"]
-    assert steps[0].cur_cwp_state == ["test_state1"]
+    assert steps[0].cur_cwp_state == "test_state1"

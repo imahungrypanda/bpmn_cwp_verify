@@ -1,282 +1,168 @@
-from returns.maybe import Nothing
+import itertools
+from dataclasses import replace
 
-from bpmncwpverify.core.error import ErrorException, TypingNotCaughtError
 from bpmncwpverify.core.feel_tree import (
-    AddNode,
-    AndNode,
-    BinaryOperatorNode,
-    BoolLiteralNode,
-    ChooseNode,
-    ComparisonOperatorNode,
-    ConditionalOperatorNode,
-    DivideNode,
-    EqualNode,
+    BinaryOp,
+    Boolean,
+    Choose,
+    FeelExpr,
+    FeelNode,
     FeelVisitor,
-    GENode,
-    GTNode,
-    IfNode,
-    LENode,
-    ListNode,
-    LTNode,
-    MultiplyNode,
-    NotEqualNode,
-    NotNode,
-    NumberLiteralNode,
-    OrNode,
-    QualifiedNameNode,
-    SubtractNode,
-    TripleListNode,
-    TripleNode,
-    XOrNode,
+    If,
+    ListExpr,
+    Name,
+    Negate,
+    Not,
+    Number,
+    Triple,
+    TripleList,
 )
-from bpmncwpverify.util.stringmanager import NL_SINGLE, StringManager
+
+_PROMELA_OPS = {
+    "+": "+",
+    "-": "-",
+    "*": "*",
+    "/": "/",
+    "<": "<",
+    ">": ">",
+    "<=": "<=",
+    ">=": ">=",
+    "=": "==",
+    "!=": "!=",
+    "and": "&&",
+    "or": "||",
+}
 
 
-class FeelToPromelaVisitor(FeelVisitor):
-    __slots__ = ["promela", "choose", "selects", "choose_id", "index"]
+class FeelToPromelaError(Exception):
+    """
+    Raised for a FEEL construct that has no Promela translation. A tree that
+    passed the type checker only reaches this for `**` with an exponent that
+    is not a non-negative whole number literal, and for `choose` outside
+    the value of a triple.
+    """
 
-    def __init__(self, choose_id: str = "") -> None:
-        self.promela = StringManager()
-        self.choose = StringManager()
-        self.selects = StringManager()
-        self.choose_id = choose_id
-        self.index: int = 0
+    def __init__(self, message: str, node: FeelNode) -> None:
+        super().__init__(f"line {node.line}:{node.column} {message}")
 
-    def visit_number_literal(self, node: NumberLiteralNode) -> bool:
-        self.promela.write_str(node.value)
-        return True
 
-    def visit_bool_literal(self, node: BoolLiteralNode) -> bool:
-        self.promela.write_str(node.value)
-        return True
-
-    def visit_qualified_name(self, node: QualifiedNameNode) -> bool:
-        self.promela.write_str(node.name)
-        return True
-
-    def visit_list(self, node: ListNode) -> bool:
-        self.promela.write_str("{")
-
-        for item in node.values:
-            item.accept(self)
-
-            if node.values.index(item) != len(node.values) - 1:
-                self.promela.write_str(", ")
-
-        self.promela.write_str("}")
-        return False
-
-    def visit_binary_operator(self, node: BinaryOperatorNode) -> bool:
-        self.promela.write_str("(")
-        node.left.accept(self)
-
-        match node:
-            case AddNode():
-                self.promela.write_str(" + ")
-            case SubtractNode():
-                self.promela.write_str(" - ")
-            case MultiplyNode():
-                self.promela.write_str(" * ")
-            case DivideNode():
-                self.promela.write_str(" / ")
-            case _:
-                raise ErrorException(
-                    TypingNotCaughtError(
-                        "TYPE ERROR: Type checker did not catch none valid symbol"
-                    )
+def _alternatives(node: FeelExpr) -> list[FeelExpr]:
+    """
+    Returns the choose-free expressions that node can stand for: one per
+    combination of choices. SPIN gets one branch of an if per alternative.
+    """
+    alts: list[FeelExpr]
+    match node:
+        case Choose():
+            alts = [a for option in node.options for a in _alternatives(option)]
+        case BinaryOp():
+            alts = [
+                replace(node, left=left, right=right)
+                for left, right in itertools.product(
+                    _alternatives(node.left), _alternatives(node.right)
                 )
-
-        node.right.accept(self)
-        self.promela.write_str(")")
-
-        return False
-
-    def visit_comparision(self, node: ComparisonOperatorNode) -> bool:
-        self.promela.write_str("(")
-        node.left.accept(self)
-
-        match node:
-            case LTNode():
-                self.promela.write_str(" < ")
-            case GTNode():
-                self.promela.write_str(" > ")
-            case LENode():
-                self.promela.write_str("<=")
-            case GENode():
-                self.promela.write_str(" >= ")
-            case EqualNode():
-                self.promela.write_str(" == ")
-            case NotEqualNode():
-                self.promela.write_str(" != ")
-            case _:
-                raise ErrorException(
-                    TypingNotCaughtError(
-                        "TYPE ERROR: Type checker did not catch none valid symbol"
-                    )
+            ]
+        case Not() | Negate():
+            alts = [replace(node, operand=a) for a in _alternatives(node.operand)]
+        case If():
+            alts = [
+                replace(node, condition=c, then_branch=t, else_branch=e)
+                for c, t, e in itertools.product(
+                    _alternatives(node.condition),
+                    _alternatives(node.then_branch),
+                    _alternatives(node.else_branch),
                 )
-
-        node.right.accept(self)
-        self.promela.write_str(")")
-        return False
-
-    def visit_conditional(self, node: ConditionalOperatorNode) -> bool:
-        self.promela.write_str("(")
-        node.left.accept(self)
-
-        match node:
-            case AndNode():
-                self.promela.write_str(" && ")
-            case OrNode():
-                self.promela.write_str(" || ")
-            case XOrNode():
-                self.promela.write_str(" && ")
-                self.promela.write_str("!")
-                node.right.accept(self)
-                self.promela.write_str(" || ")
-                self.promela.write_str("!")
-                node.left.accept(self)
-                self.promela.write_str(" && ")
-            case _:
-                raise ErrorException(
-                    TypingNotCaughtError(
-                        "TYPE ERROR: Type checker did not catch none valid symbol"
-                    )
-                )
-
-        node.right.accept(self)
-        self.promela.write_str(")")
-        return False
-
-    def visit_not(self, node: NotNode) -> bool:
-        self.promela.write_str("!")
-        return True
-
-    def visit_if(self, node: IfNode) -> bool:
-        self.promela.write_str("(")
-
-        node.condition.accept(self)
-
-        self.promela.write_str(" -> ")
-
-        node.thendo.accept(self)
-
-        self.promela.write_str(" : ")
-
-        node.elsedo.accept(self)
-
-        self.promela.write_str(")")
-
-        return False
-
-    def visit_choose(self, node: ChooseNode) -> bool:
-        choose_array: StringManager = StringManager()
-
-        choose_visitor = FeelToPromelaChooseVisitor(
-            self.choose, choose_array, self.choose_id, self.index
-        )
-        node.accept(choose_visitor)
-
-        self.promela.write_str(
-            f"choose_{self.choose_id}_{self.index}[choose_{self.choose_id}_{self.index}_i]"
-        )
-
-        self.selects.write_str(choose_array)
-
-        self.selects.write_str("atomic{")
-        self.selects.write_str(
-            f"select(choose_{self.choose_id}_{self.index}_i : 0..{len(node.choices.values) - 1})"
-        )
-        self.selects.write_str("}", NL_SINGLE)
-        self.index += 1
-        return False
-
-    def visit_triple(self, node: TripleNode) -> bool:
-        node.target.accept(self)
-        self.promela.write_str(" = ")
-        node.value.accept(self)
-
-        return False
-
-    def end_visit_triple(self, node: TripleNode) -> None:
-        pass
-
-    def visit_triple_list(self, node: TripleListNode) -> bool:
-        for triple in node.triples:
-            triple.accept(self)
-            self.promela.write_str("", NL_SINGLE)
-
-        return False
-
-    def end_visit_triple_list(self, node: TripleListNode) -> None:
-        pass
+            ]
+        case _:
+            return [node]
+    return list(dict.fromkeys(alts))  # drop repeats, keep order
 
 
-class FeelToPromelaChooseVisitor(FeelVisitor):
-    slots = ["promela", "found_choose", "choose_id", "index"]
+class FeelToPromelaVisitor(FeelVisitor[str]):
+    """
+    Turns a type-checked FEEL tree into Promela.
 
-    def __init__(
-        self, promela: StringManager, array: StringManager, choose_id: str, index: int
-    ) -> None:
-        self.promela = promela
-        self.array = array
-        self.found_choose: bool = False
-        self.choose_id = choose_id
-        self.index = index
+    Values and conditions become a Promela expression. A triple becomes
+    the statements that assign its target, and a triple list becomes those
+    statements in order. A `choose` in a triple's value becomes an
+    `if` with one branch per choice, so SPIN tries each one. Every
+    operator is parenthesized, so the result can be placed in any context.
+    """
 
-    def visit_bool_literal(self, node: BoolLiteralNode) -> bool:
-        if self.found_choose:
-            self.array.write_str(node.value)
-        return True
+    def visit_number(self, node: Number) -> str:
+        return str(node.value)
 
-    def visit_qualified_name(self, node: QualifiedNameNode) -> bool:
-        if self.found_choose:
-            self.array.write_str(node.name)
-        return True
+    def visit_boolean(self, node: Boolean) -> str:
+        return "true" if node.value else "false"
 
-    def visit_list(self, node: ListNode) -> bool:
-        if self.found_choose:
-            counter: int = 0
+    def visit_name(self, node: Name) -> str:
+        return node.name
 
-            for item in node.values:
-                self.array.write_str(
-                    f"choose_{self.choose_id}_{self.index}[{counter}] = "
-                )
-                item.accept(self)
+    def visit_list(self, node: ListExpr) -> str:
+        raise FeelToPromelaError("a list is only allowed inside 'choose'", node)
 
-                self.array.write_str("", NL_SINGLE)
+    def visit_binary_op(self, node: BinaryOp) -> str:
+        left = self.visit(node.left)
+        if node.op == "**":
+            return self._power(node, left)
+        right = self.visit(node.right)
+        if node.op == "xor":
+            return f"({left} != {right})"
+        return f"({left} {_PROMELA_OPS[node.op]} {right})"
 
-                counter += 1
-
-        return False
-
-    def visit_choose(self, node: ChooseNode) -> bool:
-        self.found_choose = True
-        if node.choices.type == Nothing:
-            raise ErrorException(
-                TypingNotCaughtError(
-                    "TYPE ERROR: list does not have a type and was not caught by the type checker"
-                )
+    def _power(self, node: BinaryOp, base: str) -> str:
+        # Promela has no power operator, so a literal exponent is unrolled
+        exponent = node.right
+        if (
+            not isinstance(exponent, Number)
+            or not isinstance(exponent.value, int)
+            or exponent.value < 0
+        ):
+            raise FeelToPromelaError(
+                "'**' needs a non-negative whole number literal as its exponent", node
             )
-        type = node.choices.type.unwrap()
+        if exponent.value == 0:
+            return "1"
+        return "(" + " * ".join([base] * exponent.value) + ")"
 
-        self.promela.write_str(
-            f"byte choose_{self.choose_id}_{self.index}_i = 0", NL_SINGLE
+    def visit_not(self, node: Not) -> str:
+        return f"(!{self.visit(node.operand)})"
+
+    def visit_negate(self, node: Negate) -> str:
+        return f"(-{self.visit(node.operand)})"
+
+    def visit_if(self, node: If) -> str:
+        return (
+            f"({self.visit(node.condition)} -> {self.visit(node.then_branch)}"
+            f" : {self.visit(node.else_branch)})"
         )
 
-        if type == "byte":
-            self.promela.write_str(
-                f"{type} choose_{self.choose_id}_{self.index}[{len(node.choices.values)}]",
-                NL_SINGLE,
-            )
-        else:
-            self.promela.write_str(
-                f"mtype:{type} choose_{self.choose_id}_{self.index}[{len(node.choices.values)}]",
-                NL_SINGLE,
-            )
+    def visit_choose(self, node: Choose) -> str:
+        raise FeelToPromelaError(
+            "'choose' is only allowed in the value of a triple", node
+        )
 
-        node.choices.accept(self)
+    def visit_triple(self, node: Triple) -> str:
+        alternatives = [self.visit(a) for a in _alternatives(node.value)]
+        if len(alternatives) == 1:
+            return f"{node.target} = {alternatives[0]}"
+        branches = "\n".join(f"\t:: {node.target} = {a}" for a in alternatives)
+        return f"if\n{branches}\nfi"
 
-        self.promela.write_str("", NL_SINGLE)
+    def visit_triple_list(self, node: TripleList) -> str:
+        return "\n".join(self.visit_triple(t) for t in node.triples)
 
-        self.found_choose = False
-        return False
+
+def condition_to_promela(expr: FeelExpr) -> str:
+    """Returns a Promela expression for a type-checked FEEL condition."""
+    return FeelToPromelaVisitor().visit(expr)
+
+
+def behavior_to_promela(expr: FeelExpr) -> str:
+    """
+    Returns Promela statements, one per line, for a type-checked FEEL
+    behavior: a triple or a triple list.
+    """
+    if not isinstance(expr, Triple | TripleList):
+        raise FeelToPromelaError("a behavior must be a triple or a triple list", expr)
+    return FeelToPromelaVisitor().visit(expr)

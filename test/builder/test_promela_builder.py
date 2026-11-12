@@ -5,28 +5,32 @@ from bpmncwpverify.builder.promela_builder import (
     _generate_logger,
     _generate_state_dump,
     _generate_state_promela,
+    _get_variable_names,
 )
 from bpmncwpverify.core.state import State
-from bpmncwpverify.util.stringmanager import NL_DOUBLE, NL_SINGLE, IndentAction
+from bpmncwpverify.util.stringmanager import NL_SINGLE, IndentAction
 
 
 def test_logger_generator(mocker):
+    # mocker.patch.object(
+    #     PromelaBuilder, "variable_name_extractor", return_value=["test_string"]
+    # )
+
+    mocker.patch(
+        "bpmncwpverify.builder.promela_builder._get_variable_names",
+        return_value=["test_string"],
+    )
+
     mock_write_str = mocker.patch(
         "bpmncwpverify.builder.promela_builder.StringManager.write_str"
     )
 
+    state = mocker.Mock()
+
     mock_val1 = mocker.Mock()
     mock_val1.name = "test_val1"
-    mock_val1.id = "test_string1"
-    mock_val1.type_ = "bool"
     mock_val2 = mocker.Mock()
     mock_val2.name = "test_val2"
-    mock_val2.id = "test_string2"
-    mock_val2.type_ = "byte"
-
-    state = mocker.Mock()
-    state.vars = [mock_val1, mock_val2]
-    state.arrays = []
 
     cwp = mocker.Mock(states={"_0": mock_val1, "_1": mock_val2})
     _generate_logger(state, cwp)
@@ -36,18 +40,10 @@ def test_logger_generator(mocker):
         mocker.call('printf("Changed Vars: \\n")', NL_SINGLE),
         mocker.call("if", NL_SINGLE, IndentAction.INC),
         mocker.call(
-            ":: test_string1 != old_test_string1 ->", NL_SINGLE, IndentAction.INC
+            ":: test_string != old_test_string ->", NL_SINGLE, IndentAction.INC
         ),
-        mocker.call('printf("test_string1 = %d\\n", test_string1)', NL_SINGLE),
-        mocker.call("old_test_string1 = test_string1", NL_SINGLE),
-        mocker.call(":: else", NL_SINGLE, IndentAction.DEC),
-        mocker.call("fi;", NL_SINGLE, IndentAction.DEC),
-        mocker.call("if", NL_SINGLE, IndentAction.INC),
-        mocker.call(
-            ":: test_string2 != old_test_string2 ->", NL_SINGLE, IndentAction.INC
-        ),
-        mocker.call('printf("test_string2 = %u\\n", test_string2)', NL_SINGLE),
-        mocker.call("old_test_string2 = test_string2", NL_SINGLE),
+        mocker.call('printf("test_string = %e\\n", test_string)', NL_SINGLE),
+        mocker.call("old_test_string = test_string", NL_SINGLE),
         mocker.call(":: else", NL_SINGLE, IndentAction.DEC),
         mocker.call("fi;", NL_SINGLE, IndentAction.DEC),
         mocker.call("if", NL_SINGLE, IndentAction.INC),
@@ -60,9 +56,20 @@ def test_logger_generator(mocker):
         mocker.call('printf("Current state: test_val2\\n")', NL_SINGLE),
         mocker.call(":: else", NL_SINGLE, IndentAction.DEC),
         mocker.call("fi;", NL_SINGLE, IndentAction.DEC),
-        mocker.call("}", NL_DOUBLE, IndentAction.DEC),
+        mocker.call("}", NL_SINGLE, IndentAction.DEC),
     ]
     mock_write_str.assert_has_calls(calls)
+
+
+def test_variable_name_extractor(mocker):
+    vars = [mocker.Mock(id=1), mocker.Mock(id=2)]
+
+    state = mocker.Mock()
+    state.vars = vars
+
+    result = _get_variable_names(state)
+
+    assert result == [1, 2]
 
 
 def test_state_dump_int(mocker):
@@ -73,13 +80,12 @@ def test_state_dump_int(mocker):
 
     state = mocker.Mock()
     state.vars = vars
-    state.arrays = []
 
     result = _generate_state_dump(state)
 
     assert (
         result
-        == 'inline stateDump(){\n\tprintf("v1 = %d\\n", v1)\n\tprintf("v2 = %d\\n", v2)\n}\n\n'
+        == 'inline stateDump(){\n\tprintf("v1 = %d\\n", v1)\n\tprintf("v2 = %d\\n", v2)\n}\n'
     )
 
 
@@ -91,12 +97,12 @@ def test_state_dump_bool(mocker):
 
     state = mocker.Mock()
     state.vars = vars
-    state.arrays = []
+
     result = _generate_state_dump(state)
 
     assert (
         result
-        == 'inline stateDump(){\n\tprintf("v1 = %d\\n", v1)\n\tprintf("v2 = %d\\n", v2)\n}\n\n'
+        == 'inline stateDump(){\n\tprintf("v1 = %d\\n", v1)\n\tprintf("v2 = %d\\n", v2)\n}\n'
     )
 
 
@@ -108,13 +114,12 @@ def test_state_dump_enum(mocker):
 
     state = mocker.Mock()
     state.vars = vars
-    state.arrays = []
 
     result = _generate_state_dump(state)
 
     assert (
         result
-        == 'inline stateDump(){\n\tprintf("v1 = %e\\n", v1)\n\tprintf("v2 = %e\\n", v2)\n}\n\n'
+        == 'inline stateDump(){\n\tprintf("v1 = %e\\n", v1)\n\tprintf("v2 = %e\\n", v2)\n}\n'
     )
 
 
@@ -128,28 +133,12 @@ def test_generate_promela(mocker):
     var2 = mocker.Mock(
         id="var2_id", type_="enum_id", init=mocker.Mock(value="init_val")
     )
-    var3 = mocker.Mock(id="var3_id", type_="bool", init=mocker.Mock(value="0"))
-    var4 = mocker.Mock(id="var4_id", type_="bit", init=mocker.Mock(value="0"))
-
-    array = mocker.Mock(
-        id="array_id",
-        type_="int",
-        size=5,
-        values=[
-            mocker.Mock(value="1"),
-            mocker.Mock(value="2"),
-            mocker.Mock(value="3"),
-            mocker.Mock(value="4"),
-            mocker.Mock(value="5"),
-        ],
-    )
 
     _consts = [const]
-    _vars = [var1, var2, var3, var4]
+    _vars = [var1, var2]
     _enums = [enum]
-    _arrays = [array]
 
-    state = State(_consts, _enums, _vars, _arrays)
+    state = State(_consts, _enums, _vars)
 
     result = _generate_state_promela(state)
 
@@ -157,16 +146,10 @@ def test_generate_promela(mocker):
         "//**********VARIABLE DECLARATION************//\n"
         "#define const_id const_init_val\n"
         "mtype:enum_id = {init_val other_val}\n"
-        "int array_id[5] = {1, 2, 3, 4, 5}\n"
-        "hidden int old_array_id[5] = {1, 2, 3, 4, 5}\n"
         "int var1_id = 0\n"
-        "hidden int old_var1_id = var1_id\n"
+        "int old_var1_id = var1_id\n"
         "mtype:enum_id var2_id = init_val\n"
-        "hidden mtype:enum_id old_var2_id = var2_id\n"
-        "bool var3_id = 0\n"
-        "bool old_var3_id = var3_id\n"
-        "bit var4_id = 0\n"
-        "bit old_var4_id = var4_id\n\n"
+        "mtype:enum_id old_var2_id = var2_id\n\n"
     )
     assert result == expected
 
@@ -178,7 +161,6 @@ def mock_state(mocker):
     state._consts = []
     state._enums = []
     state._vars = []
-    state._arrays = []
     return state
 
 
@@ -203,22 +185,9 @@ def test_generate_promela_with_full_state(mocker, mock_state):
     mock_var_int.id = "counter"
     mock_var_int.init.value = "0"
 
-    mock_array = mocker.MagicMock()
-    mock_array.type_ = "int"
-    mock_array.id = "array_id"
-    mock_array.size = 5
-    mock_array.values = [
-        mocker.Mock(value="1"),
-        mocker.Mock(value="2"),
-        mocker.Mock(value="3"),
-        mocker.Mock(value="4"),
-        mocker.Mock(value="5"),
-    ]
-
     mock_state.consts = [mock_const]
     mock_state.enums = [mock_enum]
     mock_state.vars = [mock_var_enum, mock_var_int]
-    mock_state.arrays = [mock_array]
 
     result = _generate_state_promela(mock_state)
 
@@ -226,12 +195,10 @@ def test_generate_promela_with_full_state(mocker, mock_state):
         "//**********VARIABLE DECLARATION************//\n"
         "#define MAX_COUNT 10\n"
         "mtype:TestEnum = {START STOP}\n"
-        "int array_id[5] = {1, 2, 3, 4, 5}\n"
-        "hidden int old_array_id[5] = {1, 2, 3, 4, 5}\n"
         "int state_var = START\n"
-        "hidden int old_state_var = state_var\n"
+        "int old_state_var = state_var\n"
         "int counter = 0\n"
-        "hidden int old_counter = counter\n\n"
+        "int old_counter = counter\n\n"
     )
 
     assert result == expected_output
@@ -272,34 +239,6 @@ def test_generate_promela_with_only_enums(mocker, mock_state):
     expected_output = (
         "//**********VARIABLE DECLARATION************//\n"
         "mtype:TestEnum = {IDLE RUNNING}\n\n"
-    )
-
-    assert result == expected_output
-
-
-def test_generate_promela_with_only_arrays(mocker, mock_state):
-    """Test generate_promela with only arrays."""
-
-    mock_array = mocker.MagicMock()
-    mock_array.type_ = "int"
-    mock_array.id = "array_id"
-    mock_array.size = 5
-    mock_array.values = [
-        mocker.Mock(value="1"),
-        mocker.Mock(value="2"),
-        mocker.Mock(value="3"),
-        mocker.Mock(value="4"),
-        mocker.Mock(value="5"),
-    ]
-
-    mock_state.arrays = [mock_array]
-
-    result = _generate_state_promela(mock_state)
-
-    expected_output = (
-        "//**********VARIABLE DECLARATION************//\n"
-        "int array_id[5] = {1, 2, 3, 4, 5}\n"
-        "hidden int old_array_id[5] = {1, 2, 3, 4, 5}\n\n"
     )
 
     assert result == expected_output

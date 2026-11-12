@@ -1,397 +1,294 @@
 import pytest
+from returns.pipeline import is_successful
 
-from bpmncwpverify.core.feel import Feel
+from bpmncwpverify.core.error import FeelSyntaxError, FeelUnsupportedError
+from bpmncwpverify.core.feel import parse
 from bpmncwpverify.core.feel_tree import (
-    AddNode,
-    AndNode,
-    BoolLiteralNode,
-    ChooseNode,
-    EqualNode,
-    GENode,
-    GTNode,
-    IfNode,
-    LENode,
-    ListNode,
-    LTNode,
-    MultiplyNode,
-    NotEqualNode,
-    NotNode,
-    NumberLiteralNode,
-    OrNode,
-    PowerNode,
-    QualifiedNameNode,
-    SubtractNode,
-    TripleListNode,
-    TripleNode,
-    XOrNode,
+    BinaryOp,
+    Boolean,
+    Choose,
+    FeelExpr,
+    FeelVisitor,
+    If,
+    ListExpr,
+    Name,
+    Negate,
+    Not,
+    Number,
+    Triple,
+    TripleList,
 )
 
 
-def test_parse_number_literal() -> None:
-    feel = Feel.parse("42")
-
-    assert isinstance(feel.ast, NumberLiteralNode)
-    assert feel.ast.value == "42"
-
-
-def test_parse_bool_literal() -> None:
-    feel = Feel.parse("true")
-
-    assert isinstance(feel.ast, BoolLiteralNode)
-    assert feel.ast.value
-
-
-def test_parse_addition() -> None:
-    feel = Feel.parse("1 + 2")
-
-    assert isinstance(feel.ast, AddNode)
-
-    assert isinstance(feel.ast.left, NumberLiteralNode)
-    assert isinstance(feel.ast.right, NumberLiteralNode)
-
-    assert feel.ast.left.value == "1"
-    assert feel.ast.right.value == "2"
-
-
-def test_parse_subtraction() -> None:
-    feel = Feel.parse("5 - 3")
-
-    assert isinstance(feel.ast, SubtractNode)
-
-
-def test_parse_multiplication() -> None:
-    feel = Feel.parse("1 * 2")
-
-    assert isinstance(feel.ast, MultiplyNode)
-
-    assert isinstance(feel.ast.left, NumberLiteralNode)
-    assert isinstance(feel.ast.right, NumberLiteralNode)
-
-    assert feel.ast.left.value == "1"
-    assert feel.ast.right.value == "2"
-
-
-def test_parse_power() -> None:
-    feel = Feel.parse("2 ** 3")
-
-    assert isinstance(feel.ast, PowerNode)
-
-    assert isinstance(feel.ast.left, NumberLiteralNode)
-    assert isinstance(feel.ast.right, NumberLiteralNode)
-
-    assert feel.ast.left.value == "2"
-    assert feel.ast.right.value == "3"
-
-
-def test_power_has_higher_precedence_than_add() -> None:
-    feel = Feel.parse("2 + 3 ** 4")
-
-    assert isinstance(feel.ast, AddNode)
-
-    assert isinstance(feel.ast.left, NumberLiteralNode)
-    assert isinstance(feel.ast.right, PowerNode)
-
-
-def test_power_is_right_associative() -> None:
-    feel = Feel.parse("2 ** 3 ** 4")
-
-    assert isinstance(feel.ast, PowerNode)
-
-    assert isinstance(feel.ast.left, PowerNode)
-    assert isinstance(feel.ast.right, NumberLiteralNode)
-
-    assert feel.ast.right.value == "4"
-
-
-def test_parse_less_than() -> None:
-    feel = Feel.parse("1 < 2")
-
-    assert isinstance(feel.ast, LTNode)
-
-    assert isinstance(feel.ast.left, NumberLiteralNode)
-    assert isinstance(feel.ast.right, NumberLiteralNode)
-
-    assert feel.ast.left.value == "1"
-    assert feel.ast.right.value == "2"
-
-
-def test_parse_greater_than() -> None:
-    feel = Feel.parse("1 > 2")
-
-    assert isinstance(feel.ast, GTNode)
-
-    assert isinstance(feel.ast.left, NumberLiteralNode)
-    assert isinstance(feel.ast.right, NumberLiteralNode)
-
-    assert feel.ast.left.value == "1"
-    assert feel.ast.right.value == "2"
-
-
-def test_parse_less_than_equal() -> None:
-    feel = Feel.parse("1 <= 2")
-
-    assert isinstance(feel.ast, LENode)
-
-    assert isinstance(feel.ast.left, NumberLiteralNode)
-    assert isinstance(feel.ast.right, NumberLiteralNode)
-
-    assert feel.ast.left.value == "1"
-    assert feel.ast.right.value == "2"
-
-
-def test_parse_greater_than_equal() -> None:
-    feel = Feel.parse("1 >= 2")
-
-    assert isinstance(feel.ast, GENode)
-
-    assert isinstance(feel.ast.left, NumberLiteralNode)
-    assert isinstance(feel.ast.right, NumberLiteralNode)
-
-    assert feel.ast.left.value == "1"
-    assert feel.ast.right.value == "2"
-
-
-def test_parse_equal() -> None:
-    feel = Feel.parse("1 = 2")
-
-    assert isinstance(feel.ast, EqualNode)
-
-    assert isinstance(feel.ast.left, NumberLiteralNode)
-    assert isinstance(feel.ast.right, NumberLiteralNode)
-
-    assert feel.ast.left.value == "1"
-    assert feel.ast.right.value == "2"
-
-
-def test_parse_not_equal() -> None:
-    feel = Feel.parse("1 != 2")
-
-    assert isinstance(feel.ast, NotEqualNode)
-
-    assert isinstance(feel.ast.left, NumberLiteralNode)
-    assert isinstance(feel.ast.right, NumberLiteralNode)
-
-    assert feel.ast.left.value == "1"
-    assert feel.ast.right.value == "2"
-
-
-def test_parse_and() -> None:
-    feel = Feel.parse("1 and 2")
-
-    assert isinstance(feel.ast, AndNode)
-
-    assert isinstance(feel.ast.left, NumberLiteralNode)
-    assert isinstance(feel.ast.right, NumberLiteralNode)
-
-    assert feel.ast.left.value == "1"
-    assert feel.ast.right.value == "2"
-
-
-def test_parse_or() -> None:
-    feel = Feel.parse("1 or 2")
-
-    assert isinstance(feel.ast, OrNode)
-
-    assert isinstance(feel.ast.left, NumberLiteralNode)
-    assert isinstance(feel.ast.right, NumberLiteralNode)
-
-    assert feel.ast.left.value == "1"
-    assert feel.ast.right.value == "2"
-    # terms != pending or<br>paymentOffered != pendingPayment
-
-
-def test_parse_multiple() -> None:
-    feel = Feel.parse("terms != pending or paymentOffered != pendingPayment")
-
-    assert isinstance(feel.ast, OrNode)
-
-    assert isinstance(feel.ast.left, NotEqualNode)
-    assert isinstance(feel.ast.right, NotEqualNode)
-
-    assert isinstance(feel.ast.left.left, QualifiedNameNode)
-    assert isinstance(feel.ast.left.right, QualifiedNameNode)
-    assert isinstance(feel.ast.right.left, QualifiedNameNode)
-    assert isinstance(feel.ast.right.right, QualifiedNameNode)
-
-    assert feel.ast.left.left.name == "terms"
-    assert feel.ast.left.right.name == "pending"
-    assert feel.ast.right.left.name == "paymentOffered"
-    assert feel.ast.right.right.name == "pendingPayment"
-
-
-def test_parse_if() -> None:
-    feel = Feel.parse("if 2 then 3 else 4")
-
-    assert isinstance(feel.ast, IfNode)
-
-    assert isinstance(feel.ast.condition, NumberLiteralNode)
-    assert isinstance(feel.ast.thendo, NumberLiteralNode)
-    assert isinstance(feel.ast.elsedo, NumberLiteralNode)
-
-    assert feel.ast.condition.value == "2"
-    assert feel.ast.thendo.value == "3"
-    assert feel.ast.elsedo.value == "4"
-
-
-def test_parse_not() -> None:
-    feel = Feel.parse("not(4)")
-
-    assert isinstance(feel.ast, NotNode)
-
-    assert isinstance(feel.ast.expression, NumberLiteralNode)
-
-    assert feel.ast.expression.value == "4"
-
-
-def test_parse_empty_list() -> None:
-    feel = Feel.parse("[]")
-
-    assert isinstance(feel.ast, ListNode)
-
-    assert feel.ast.values == []
-
-
-def test_parse_list() -> None:
-    feel = Feel.parse("[1, 2, 3]")
-
-    assert isinstance(feel.ast, ListNode)
-    assert isinstance(feel.ast.values[0], NumberLiteralNode)
-    assert isinstance(feel.ast.values[1], NumberLiteralNode)
-    assert isinstance(feel.ast.values[2], NumberLiteralNode)
-
-    assert feel.ast.values[0].value == "1"
-    assert feel.ast.values[1].value == "2"
-    assert feel.ast.values[2].value == "3"
-
-
-def test_parse_choose() -> None:
-    feel = Feel.parse("choose [1, 2, 3]")
-
-    assert isinstance(feel.ast, ChooseNode)
-    assert isinstance(feel.ast.choices, ListNode)
-    assert isinstance(feel.ast.choices.values[0], NumberLiteralNode)
-
-    assert feel.ast.choices.values[0].value == "1"
-
-
-def test_parse_xor() -> None:
-    feel = Feel.parse("1 Xor 2")
-
-    assert isinstance(feel.ast, XOrNode)
-    assert isinstance(feel.ast.left, NumberLiteralNode)
-    assert isinstance(feel.ast.right, NumberLiteralNode)
-
-    assert feel.ast.left.value == "1"
-    assert feel.ast.right.value == "2"
-
-
-def test_parse_or_names() -> None:
-    feel = Feel.parse("this or that")
-
-    assert isinstance(feel.ast, OrNode)
-    assert isinstance(feel.ast.left, QualifiedNameNode)
-    assert isinstance(feel.ast.right, QualifiedNameNode)
-
-    assert feel.ast.left.name == "this"
-    assert feel.ast.right.name == "that"
-
-
-def test_parse_qualified_name() -> None:
-    feel = Feel.parse("x")
-
-    assert isinstance(feel.ast, QualifiedNameNode)
-
-    assert feel.ast.name == "x"
-
-
-def test_parse_qualified_name_with_path() -> None:
-    feel = Feel.parse("a.b.c")
-
-    assert isinstance(feel.ast, QualifiedNameNode)
-
-    assert feel.ast.name == "a.b.c"
-
-
-def test_parse_triple_no_inputs() -> None:
-    feel = Feel.parse("(backpackOwner, [], buyerName)")
-
-    assert isinstance(feel.ast, TripleNode)
-    assert isinstance(feel.ast.target, QualifiedNameNode)
-    assert isinstance(feel.ast.inputs, ListNode)
-    assert isinstance(feel.ast.value, QualifiedNameNode)
-
-    assert feel.ast.target.name == "backpackOwner"
-    assert feel.ast.inputs.values == []
-    assert feel.ast.value.name == "buyerName"
-
-
-def test_parse_triple_inputs() -> None:
-    feel = Feel.parse("(x, [y, z], 1)")
-
-    assert isinstance(feel.ast, TripleNode)
-    assert isinstance(feel.ast.target, QualifiedNameNode)
-    assert isinstance(feel.ast.inputs, ListNode)
-    assert isinstance(feel.ast.inputs.values[0], QualifiedNameNode)
-    assert isinstance(feel.ast.inputs.values[1], QualifiedNameNode)
-    assert isinstance(feel.ast.value, NumberLiteralNode)
-
-    assert feel.ast.target.name == "x"
-    assert feel.ast.inputs.values[0].name == "y"
-    assert feel.ast.inputs.values[1].name == "z"
-    assert feel.ast.value.value == "1"
-
-
-def test_parse_triple_if() -> None:
-    feel = Feel.parse("(x, [y, z], if y then 1 else 2)")
-
-    assert isinstance(feel.ast, TripleNode)
-    assert isinstance(feel.ast.target, QualifiedNameNode)
-    assert isinstance(feel.ast.inputs, ListNode)
-    assert isinstance(feel.ast.inputs.values[0], QualifiedNameNode)
-    assert isinstance(feel.ast.inputs.values[1], QualifiedNameNode)
-    assert isinstance(feel.ast.value, IfNode)
-    assert isinstance(feel.ast.value.condition, QualifiedNameNode)
-    assert isinstance(feel.ast.value.thendo, NumberLiteralNode)
-    assert isinstance(feel.ast.value.elsedo, NumberLiteralNode)
-
-    assert feel.ast.target.name == "x"
-    assert feel.ast.inputs.values[0].name == "y"
-    assert feel.ast.inputs.values[1].name == "z"
-    assert feel.ast.value.condition.name == "y"
-    assert feel.ast.value.thendo.value == "1"
-    assert feel.ast.value.elsedo.value == "2"
-
-
-def test_list_of_triples() -> None:
-    feel = Feel.parse("((x, [], y), (z, [], w))")
-
-    assert isinstance(feel.ast, TripleListNode)
-    assert isinstance(feel.ast.triples[0], TripleNode)
-    assert isinstance(feel.ast.triples[1], TripleNode)
-    assert isinstance(feel.ast.triples[0].target, QualifiedNameNode)
-    assert isinstance(feel.ast.triples[1].target, QualifiedNameNode)
-
-    assert feel.ast.triples[0].target.name == "x"
-    assert feel.ast.triples[1].target.name == "z"
-
-
-def test_choose_with_expr() -> None:
-    feel = Feel.parse("choose [1, if (true) then 2 else 3]")
-
-    assert isinstance(feel.ast, ChooseNode)
-    assert isinstance(feel.ast.choices, ListNode)
-    assert isinstance(feel.ast.choices.values[1], IfNode)
-
-
-def test_parser_requires_parenthesis_around_condition() -> None:
-    pytest.skip("Temporarily diabled for issue 392")
-    feel_good = Feel.parse(
-        "(alert, [alert, trndSevNeed], if (trndSevNeed = homeCare) then no else if (trndSevNeed = outsideHomeCare) then choose [yes, no] else alert)"
-    )
-    feel_broken = Feel.parse(
-        "(alert, [alert, trndSevNeed], if trndSevNeed = homeCare then no else if (trndSevNeed = outsideHomeCare) then choose [yes, no] else alert)"
+def _ok(text: str) -> FeelExpr:
+    result = parse(text)
+    assert is_successful(result), text
+    return result.unwrap()
+
+
+def _bin(op: str, left: FeelExpr, right: FeelExpr) -> BinaryOp:
+    return BinaryOp(op, left, right)  # type: ignore[arg-type]
+
+
+def _n(name: str) -> Name:
+    return Name(name)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("3", Number(3)),
+        ("2.5", Number(2.5)),
+        ("true", Boolean(True)),
+        ("false", Boolean(False)),
+        ("x", _n("x")),
+        ("a.b.c", _n("a.b.c")),
+        ("[]", ListExpr(())),
+        ("[a, 1, true]", ListExpr((_n("a"), Number(1), Boolean(True)))),
+        ("(x)", _n("x")),
+        ("((x))", _n("x")),
+        ("-x", Negate(_n("x"))),
+        ("not x", Not(_n("x"))),
+        ("a + b", _bin("+", _n("a"), _n("b"))),
+        ("a - b", _bin("-", _n("a"), _n("b"))),
+        ("a * b", _bin("*", _n("a"), _n("b"))),
+        ("a / b", _bin("/", _n("a"), _n("b"))),
+        ("a ** b", _bin("**", _n("a"), _n("b"))),
+        ("a < b", _bin("<", _n("a"), _n("b"))),
+        ("a > b", _bin(">", _n("a"), _n("b"))),
+        ("a <= b", _bin("<=", _n("a"), _n("b"))),
+        ("a >= b", _bin(">=", _n("a"), _n("b"))),
+        ("a = b", _bin("=", _n("a"), _n("b"))),
+        ("a != b", _bin("!=", _n("a"), _n("b"))),
+        ("a and b", _bin("and", _n("a"), _n("b"))),
+        ("a or b", _bin("or", _n("a"), _n("b"))),
+        ("a xor b", _bin("xor", _n("a"), _n("b"))),
+        (
+            "if c then 1 else 2",
+            If(_n("c"), Number(1), Number(2)),
+        ),
+        (
+            "choose [on, off]",
+            Choose((_n("on"), _n("off"))),
+        ),
+        (
+            "(door, [], open)",
+            Triple("door", (), _n("open")),
+        ),
+        (
+            "(count, [count, x.y], count + 1)",
+            Triple("count", ("count", "x.y"), _bin("+", _n("count"), Number(1))),
+        ),
+        (
+            "((x, [], 1), (y, [x], x + 1))",
+            TripleList(
+                (
+                    Triple("x", (), Number(1)),
+                    Triple("y", ("x",), _bin("+", _n("x"), Number(1))),
+                )
+            ),
+        ),
+        ("((x, [], 1))", Triple("x", (), Number(1))),
+    ],
+)
+def test_parse_construct(text: str, expected: FeelExpr) -> None:
+    assert _ok(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("a + b * c", _bin("+", _n("a"), _bin("*", _n("b"), _n("c")))),
+        ("a - b - c", _bin("-", _bin("-", _n("a"), _n("b")), _n("c"))),
+        ("(a + b) * c", _bin("*", _bin("+", _n("a"), _n("b")), _n("c"))),
+        ("-x ** 2", Negate(_bin("**", _n("x"), Number(2)))),
+        ("a ** -1", _bin("**", _n("a"), Negate(Number(1)))),
+        ("a ** b ** c", _bin("**", _bin("**", _n("a"), _n("b")), _n("c"))),
+        (
+            "a + 1 < b",
+            _bin("<", _bin("+", _n("a"), Number(1)), _n("b")),
+        ),
+        (
+            "not a = b",
+            Not(_bin("=", _n("a"), _n("b"))),
+        ),
+        (
+            "a or b and c",
+            _bin("or", _n("a"), _bin("and", _n("b"), _n("c"))),
+        ),
+        (
+            "a or b xor c and d",
+            _bin(
+                "or",
+                _n("a"),
+                _bin("xor", _n("b"), _bin("and", _n("c"), _n("d"))),
+            ),
+        ),
+        (
+            "if a then b else c + 1",
+            If(_n("a"), _n("b"), _bin("+", _n("c"), Number(1))),
+        ),
+        (
+            "1 + if a then 2 else 3",
+            _bin("+", Number(1), If(_n("a"), Number(2), Number(3))),
+        ),
+        (
+            "if a then (x, [], 1) else (y, [], 2)",
+            If(_n("a"), Triple("x", (), Number(1)), Triple("y", (), Number(2))),
+        ),
+        (
+            "(x, [], if a then 1 else 2)",
+            Triple("x", (), If(_n("a"), Number(1), Number(2))),
+        ),
+    ],
+)
+def test_parse_precedence(text: str, expected: FeelExpr) -> None:
+    assert _ok(text) == expected
+
+
+def test_parse_task_behavior_example() -> None:
+    tree = _ok("((light, [], choose [on, off]),\n(count, [count], count + 1))")
+    assert tree == TripleList(
+        (
+            Triple("light", (), Choose((_n("on"), _n("off")))),
+            Triple("count", ("count",), _bin("+", _n("count"), Number(1))),
+        )
     )
 
-    assert isinstance(feel_good.ast, TripleNode)
-    assert isinstance(feel_good.ast.value, IfNode)
-    assert isinstance(feel_broken.ast, TripleNode)
+
+def test_parse_condition_examples() -> None:
+    assert _ok("door = open and count < 3") == _bin(
+        "and",
+        _bin("=", _n("door"), _n("open")),
+        _bin("<", _n("count"), Number(3)),
+    )
+    assert _ok("light = on or count = 3") == _bin(
+        "or",
+        _bin("=", _n("light"), _n("on")),
+        _bin("=", _n("count"), Number(3)),
+    )
+
+
+def test_parse_records_position() -> None:
+    tree = _ok("a +\n  b")
+    assert isinstance(tree, BinaryOp)
+    assert (tree.line, tree.column) == (1, 0)
+    assert (tree.right.line, tree.right.column) == (2, 2)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '"abc"',
+        '@"2020-01-01"',
+        "null",
+        "f(x)",
+        "abs(1)",
+        "a.b(1)",
+        "[1..5]",
+        "(1..5)",
+        "{a: 1}",
+        "for x in [1, 2] return x",
+        "some x in [1, 2] satisfies x > 1",
+        "every x in [1, 2] satisfies x > 1",
+        "x in [1, 2]",
+        "x between 1 and 2",
+        "x instance of number",
+        "function(x) x",
+        "a[1]",
+        "(x, [], f(1))",
+    ],
+)
+def test_unsupported_feel_gives_unsupported_error(text: str) -> None:
+    result = parse(text)
+    assert not is_successful(result)
+    error = result.failure()
+    assert isinstance(error, FeelUnsupportedError)
+    assert error.line == 1
+
+
+def test_unsupported_error_names_construct_and_position() -> None:
+    error = parse("a and\n  f(1)").failure()
+    assert isinstance(error, FeelUnsupportedError)
+    assert "f(...)" in error.construct
+    assert (error.line, error.column) == (2, 2)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "1 +",
+        "a b",
+        "a, b",
+        "(a, b)",
+        "(x, [], 1) (y, [], 2)",
+        "(x, 1, 2)",
+        "(x, [], )",
+        "(1, [], 2)",
+        "choose []",
+        "choose a",
+        "if a then b",
+        "[1, 2",
+        "(a",
+        "a)",
+        "a % b",
+        "a == b",
+        "a && b",
+        "$",
+        '"unterminated',
+    ],
+)
+def test_bad_syntax_gives_syntax_error(text: str) -> None:
+    result = parse(text)
+    assert not is_successful(result)
+    assert isinstance(result.failure(), FeelSyntaxError)
+
+
+class _Printer(FeelVisitor[str]):
+    def visit_number(self, node: Number) -> str:
+        return str(node.value)
+
+    def visit_boolean(self, node: Boolean) -> str:
+        return str(node.value).lower()
+
+    def visit_name(self, node: Name) -> str:
+        return node.name
+
+    def visit_list(self, node: ListExpr) -> str:
+        return "[" + ",".join(self.visit(i) for i in node.items) + "]"
+
+    def visit_binary_op(self, node: BinaryOp) -> str:
+        return f"({self.visit(node.left)} {node.op} {self.visit(node.right)})"
+
+    def visit_not(self, node: Not) -> str:
+        return f"not {self.visit(node.operand)}"
+
+    def visit_negate(self, node: Negate) -> str:
+        return f"-{self.visit(node.operand)}"
+
+    def visit_if(self, node: If) -> str:
+        return f"if {self.visit(node.condition)} then {self.visit(node.then_branch)} else {self.visit(node.else_branch)}"
+
+    def visit_choose(self, node: Choose) -> str:
+        return "choose [" + ",".join(self.visit(o) for o in node.options) + "]"
+
+    def visit_triple(self, node: Triple) -> str:
+        return f"<{node.target}|{','.join(node.inputs)}|{self.visit(node.value)}>"
+
+    def visit_triple_list(self, node: TripleList) -> str:
+        return ";".join(self.visit(t) for t in node.triples)
+
+
+def test_visitor_dispatches_every_node_type() -> None:
+    assert (
+        _Printer().visit(_ok("((x, [], 1), (y, [x], x / 2))")) == "<x||1>;<y|x|(x / 2)>"
+    )
+    assert _Printer().visit(
+        _ok("if not a then [1, -b, true] else choose [1, 3 ** 2]")
+    ) == ("if not a then [1,-b,true] else choose [1,(3 ** 2)]")
+
+
+def test_visitor_default_raises_not_implemented() -> None:
+    with pytest.raises(NotImplementedError):
+        FeelVisitor[int]().visit(Number(1))

@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12.12"]
+        python-version: ["3.12"]
 
     steps:
     - name: Set up Node.js
@@ -28,18 +28,35 @@ jobs:
       uses: actions/setup-python@v3
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install CBMC
-      run: |
-        CBMC_VERSION=$(grep 'ARG CBMC_VERSION=' Dockerfile | cut -d= -f2)
-        wget -q https://github.com/diffblue/cbmc/releases/download/cbmc-${CBMC_VERSION}/ubuntu-22.04-cbmc-${CBMC_VERSION}-Linux.deb
-        sudo apt-get update
-        sudo apt-get install -y ./ubuntu-22.04-cbmc-${CBMC_VERSION}-Linux.deb
-        cbmc --version
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install --editable ".[dev]"
         python -c "import returns.contrib.mypy.returns_plugin"
+    - name: Configure pyrightconfig.json with site-packages path
+      run: |
+        SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
+        cat > pyrightconfig.json <<EOF
+        {
+          "typeCheckingMode": "strict",
+          "pythonVersion": "3.12",
+          "include": ["src"],
+          "exclude": [
+            "src/bpmncwpverify/antlr",
+            "test",
+            "**/__pycache__",
+            "**/.venv",
+            "**/.mypy_cache",
+            "**/build",
+            "**/dist"
+          ],
+          "reportUnknownArgumentType": false,
+          "extraPaths": [
+            "src",
+            "$SITE_PACKAGES"
+          ]
+        }
+        EOF
     - name: Pre-commit
       uses: pre-commit/action@v3.0.1
     - name: Test pass-off

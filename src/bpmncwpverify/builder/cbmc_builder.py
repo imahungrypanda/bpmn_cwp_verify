@@ -1,146 +1,157 @@
-"""
-cbmc_builder.py — Top-level builder for CBMC C file generation.
+import re
 
-Mirrors PromelaBuilder: three with_*() setters, one build() → Result[str, Error].
-
-The generated C file has this structure:
-  1. File header
-  2. #include <stdbool.h>, nondet_int() declaration
-  3. State #defines (consts, enum values)
-  4. BOUND #define
-  5. CWP state #defines  (from CwpCbmcVisitor)
-  6. Transition #defines (from BpmnCbmcVisitor)
-  7. update_cwp_state()  (from CwpCbmcVisitor)
-  8. int main()          (from BpmnCbmcVisitor)
-"""
-
-from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
-from bpmncwpverify.builder.cbmc_bound import compute_bound
-from bpmncwpverify.core.bpmn import Bpmn
+from bpmncwpverify.builder.cbmc_bound import compute_unwinding_bound
+from bpmncwpverify.core.bpmn import Bpmn, EndEvent
 from bpmncwpverify.core.cwp import Cwp
-from bpmncwpverify.core.error import CbmcGeneratorError, Error, NotInitializedError
+from bpmncwpverify.core.error import CbmcBuildError, Error, NotInitializedError
 from bpmncwpverify.core.state import State
-from bpmncwpverify.visitors.bpmn_cbmc_visitor import BpmnCbmcVisitor
-from bpmncwpverify.visitors.cwp_cbmc_visitor import CwpCbmcVisitor
+from bpmncwpverify.util.stringmanager import NL_SINGLE, IndentAction, StringManager
+from bpmncwpverify.visitors.bpmn_cbmc_visitor import (
+    HELPER_DEFS_STR,
+    CbmcBpmnGenVisitor,
+)
+from bpmncwpverify.visitors.cwp_cbmc_visitor import (
+    INIT_FUNC,
+    STATE_PREFIX,
+    STATE_VAR,
+    UPDATE_FUNC,
+    CwpCbmcVisitor,
+)
 
-# ── State-to-C helpers ────────────────────────────────────────────────────────
+STEP_VAR = "bpmn_step"
+COVER_FUNC = "cwp_cover"
+REACHABILITY_MACRO = "REACHABILITY"
+# Comments that tell the runner what a `__CPROVER_cover` stands for
+END_EVENT_MARK = "end event: "
+CWP_STATE_MARK = "CWP state: "
+_C_TYPES = {
+    "bit": "unsigned char",
+    "bool": "bool",
+    "byte": "unsigned char",
+    "int": "int",
+    "short": "short",
+}
 
 
-def _state_defines(state: State) -> str:
+def _generate_state_c(state: State) -> Result[str, Error]:
+    enum_ids = {enum.id for enum in state.enums}
+    lines = ["//**********VARIABLE DECLARATION************//"]
+    for const_decl in state.consts:
+        lines.append(f"#define {const_decl.id} {const_decl.init.value}")
+    for enum_decl in state.enums:
+        values = ", ".join(sorted(value.value for value in enum_decl.values))
+        lines.append(f"typedef enum {{ {values} }} {enum_decl.id};")
+    for var_decl in state.vars:
+        if var_decl.type_ in enum_ids:
+            c_type = var_decl.type_
+        elif var_decl.type_ in _C_TYPES:
+            c_type = _C_TYPES[var_decl.type_]
+        else:
+            return Failure(
+                CbmcBuildError(
+                    f"variable '{var_decl.id}' has type '{var_decl.type_}' with no C equivalent"
+                )
+            )
+        lines.append(f"{c_type} {var_decl.id} = {var_decl.init.value};")
+    return Success("\n".join(lines) + "\n\n")
+
+
+def _state_enumerator(name: str) -> str:
+    # the same naming as the CWP visitor's enumerators
+    return STATE_PREFIX + re.sub(r"\W", "_", name)
+
+
+def _generate_cover_func(cwp: Cwp, cwp_visitor: CwpCbmcVisitor) -> str:
     """
-    Emit C #define lines for consts and enum values.
-
-    Consts:     #define <id>  <init_value>
-    Enum vals:  #define <value>  N   (sequential per enum, 0-based)
+    A function with one cover per CWP state, for the reachability run only. The
+    start state is left out: the initial values put the CWP straight into the
+    state after it, so the start state is never the active one.
     """
-    lines: list[str] = []
-    for const in state.consts:
-        lines.append(f"#define {const.id:<28} {const.init.value}")
-    for enum in state.enums:
-        for i, val in enumerate(enum.values):
-            lines.append(f"#define {val.value:<28} {i}")
-    return "\n".join(lines) + "\n" if lines else ""
+    lines = [f"#ifdef {REACHABILITY_MACRO}", f"static void {COVER_FUNC}(void) {{"]
+    for name, state in cwp_visitor.states.items():
+        if state is cwp.start_state or name == cwp.start_state.name:
+            continue
+        lines.append(
+            f"  __CPROVER_cover({STATE_VAR} == {_state_enumerator(state.name)}); "
+            f"/* {CWP_STATE_MARK}{name} */"
+        )
+    lines += ["}", "#endif", ""]
+    return "\n".join(lines) + "\n"
 
 
-def _var_decls(state: State) -> list[str]:
-    """
-    C variable declarations for main() — bare-bones: all as int.
-    e.g. ["int x = 0;"] or ["int terms = TERMS_PENDING;"]
-    """
-    decls: list[str] = []
-    enum_ids = {e.id for e in state.enums}
-    for var in state.vars:
-        # bare bones: always declare as int regardless of type_
-        _ = enum_ids  # noted: ignored in this bare-bones version
-        decls.append(f"int {var.id} = {var.init.value};")
-    return decls
+def _cover_end_events(bpmn: Bpmn, bpmn_visitor: CbmcBpmnGenVisitor) -> None:
+    """Adds a reachability-only cover to the transition of each end event."""
+    end_ids = {
+        node_id
+        for process in bpmn.processes.values()
+        for node_id, node in process.all_items().items()
+        if isinstance(node, EndEvent)
+    }
+    for transition in bpmn_visitor.transitions:
+        if transition.label in end_ids:
+            transition.body += [
+                f"#ifdef {REACHABILITY_MACRO}",
+                f"__CPROVER_cover(1); /* {END_EVENT_MARK}{transition.label} */",
+                "#endif",
+            ]
 
 
-def _var_params(state: State) -> list[str]:
-    """
-    C parameter declarations for update_cwp_state() — bare-bones: all int.
-    e.g. ["int x"] or ["int terms", "int paymentOffered", ...]
-    """
-    return [f"int {var.id}" for var in state.vars]
+def _write_cover_call(out: StringManager) -> None:
+    out.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    out.write_str(f"{COVER_FUNC}();", NL_SINGLE)
+    out.write_str("#endif", NL_SINGLE)
 
 
-def _var_args(state: State) -> list[str]:
-    """
-    Call arguments for update_cwp_state() — just variable names.
-    e.g. ["x"] or ["terms", "paymentOffered", ...]
-    """
-    return [var.id for var in state.vars]
+def _generate_main(bpmn_visitor: CbmcBpmnGenVisitor, bound: int) -> str:
+    out = StringManager()
+    out.write_str("int main(void) {", NL_SINGLE, IndentAction.INC)
+    # Like the Promela init block: the CWP starts in the state the initial
+    # variable values put it in, before any process runs
+    out.write_str(f"{INIT_FUNC}();", NL_SINGLE)
+    _write_cover_call(out)
+    out.write_str(
+        f"for (unsigned int {STEP_VAR} = 0; {STEP_VAR} < {bound}u; {STEP_VAR}++) {{",
+        NL_SINGLE,
+        IndentAction.INC,
+    )
+    out.write_str(f"if ({bpmn_visitor.all_ended_expr()}) break;", NL_SINGLE)
+    out.write_str(bpmn_visitor.gen_pass(), NL_SINGLE)
+    out.write_str(f"{UPDATE_FUNC}();", NL_SINGLE)
+    _write_cover_call(out)
+    out.write_str("}", NL_SINGLE, IndentAction.DEC)
+    out.write_str("return 0;", NL_SINGLE)
+    out.write_str("}", NL_SINGLE, IndentAction.DEC)
+    return str(out)
 
 
-# ── C file assembly ────────────────────────────────────────────────────────────
-
-
-def _generate_c(
-    state: State, cwp: Cwp, bpmn: Bpmn, max_retries: int
-) -> Result[tuple[str, int], Error]:
-    # ── Run CWP visitor ──
+def _generate_c(state: State, cwp: Cwp, bpmn: Bpmn) -> Result[str, Error]:
+    state_c = _generate_state_c(state)
+    if isinstance(state_c, Failure):
+        return state_c
     cwp_visitor = CwpCbmcVisitor()
     cwp.accept(cwp_visitor)
-
-    # ── Run BPMN visitor ──
-    bpmn_visitor = BpmnCbmcVisitor()
+    bpmn_visitor = CbmcBpmnGenVisitor()
     bpmn.accept(bpmn_visitor)
-
-    if bpmn_visitor.error is not None:
-        return Failure(bpmn_visitor.error)
-
-    if bpmn_visitor.num_transitions == 0:
-        return Failure(CbmcGeneratorError("BPMN produced no transitions"))
-
-    # ── Derived values ──
-    bound = compute_bound(bpmn, max_retries)
-    st_defines = _state_defines(state)
-    v_decls = _var_decls(state)
-    v_params = _var_params(state)
-    v_args = _var_args(state)
-
-    cwp_define_names = cwp_visitor.reachable_state_define_names()
-
-    # ── Assemble ──
-    sections: list[str] = []
-
-    sections.append(
-        "/* Auto-generated by cbmc_builder.py — do not edit by hand. */\n"
-        "#include <stdbool.h>\n"
-        "\n"
-        "int nondet_int();\n"
+    checked = bpmn_visitor.get_result()
+    if isinstance(checked, Failure):
+        return checked
+    _cover_end_events(bpmn, bpmn_visitor)
+    bound = compute_unwinding_bound(bpmn)
+    return Success(
+        f"{HELPER_DEFS_STR}\n{state_c.unwrap()}{cwp_visitor}\n"
+        f"{_generate_cover_func(cwp, cwp_visitor)}"
+        f"{bpmn_visitor.gen_defs()}\n{_generate_main(bpmn_visitor, bound)}"
     )
-
-    if st_defines:
-        sections.append(st_defines)
-
-    sections.append(f"#define {'BOUND':<28} {bound}\n")
-
-    sections.append(cwp_visitor.generate_state_defines())
-
-    sections.append(bpmn_visitor.generate_transition_defines())
-
-    sections.append(cwp_visitor.generate_update_cwp_state(v_params))
-
-    sections.append(
-        bpmn_visitor.generate_main(
-            var_decls=v_decls,
-            var_args=v_args,
-            cwp_num_states_define="CWP_NUM_STATES",
-            cwp_state_define_names=cwp_define_names,
-        )
-    )
-
-    return Success(("\n".join(sections), bound))
-
-
-# ── Builder class ──────────────────────────────────────────────────────────────
 
 
 class CbmcBuilder:
-    __slots__ = ["bpmn", "cwp", "state", "max_retries", "last_bound"]
+    __slots__ = [
+        "bpmn",
+        "cwp",
+        "state",
+    ]
 
     def __init__(self) -> None:
         self.bpmn: Result[Bpmn, Error] = Failure(
@@ -150,8 +161,23 @@ class CbmcBuilder:
         self.state: Result[State, Error] = Failure(
             NotInitializedError("CbmcBuilder.state")
         )
-        self.max_retries: int = 2
-        self.last_bound: int = 0
+
+    def build(self) -> Result[str, Error]:
+        result: Result[str, Error] = self.state.bind(  # pyright: ignore[reportUnknownMemberType]
+            lambda state: self.cwp.bind(  # pyright: ignore[reportUnknownMemberType]
+                lambda cwp: self.bpmn.bind(  # pyright: ignore[reportUnknownMemberType]
+                    lambda bpmn: _generate_c(state, cwp, bpmn)
+                )
+            )
+        )
+        return result
+
+    def bound(self) -> Result[int, Error]:
+        """
+        The number of passes main()'s loop makes at most. Pass `bound + 1` to
+        CBMC as `--unwind`.
+        """
+        return self.bpmn.map(compute_unwinding_bound)  # pyright: ignore[reportUnknownMemberType]
 
     def with_bpmn(self, bpmn: Bpmn) -> "CbmcBuilder":
         self.bpmn = Success(bpmn)
@@ -164,23 +190,3 @@ class CbmcBuilder:
     def with_state(self, state: State) -> "CbmcBuilder":
         self.state = Success(state)
         return self
-
-    def with_max_retries(self, max_retries: int) -> "CbmcBuilder":
-        self.max_retries = max_retries
-        return self
-
-    def build(self) -> Result[str, Error]:
-        max_retries = self.max_retries
-        self.last_bound = 0
-        inner: Result[tuple[str, int], Error] = self.state.bind(  # pyright: ignore[reportUnknownMemberType]
-            lambda state: self.cwp.bind(  # pyright: ignore[reportUnknownMemberType]
-                lambda cwp: self.bpmn.bind(  # pyright: ignore[reportUnknownMemberType]
-                    lambda bpmn: _generate_c(state, cwp, bpmn, max_retries)
-                )
-            )
-        )
-        if is_successful(inner):
-            c_code, bound = inner.unwrap()
-            self.last_bound = bound
-            return Success(c_code)
-        return Failure(inner.failure())

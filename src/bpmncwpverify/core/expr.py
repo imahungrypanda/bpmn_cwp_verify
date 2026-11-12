@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, cast
 
 from antlr4 import CommonTokenStream, InputStream, ParseTreeWalker
 from antlr4.error.ErrorListener import ConsoleErrorListener, ErrorListener
@@ -11,7 +11,7 @@ from returns.result import Failure, Result, Success
 
 from bpmncwpverify.antlr.ExprLexer import ExprLexer
 from bpmncwpverify.antlr.ExprListener import ExprListener
-from bpmncwpverify.antlr.ExprParser import ExprParser
+from bpmncwpverify.antlr.ExprParser import ExprParser  # type: ignore[attr-defined]
 from bpmncwpverify.core import typechecking
 from bpmncwpverify.core.error import (
     Error,
@@ -94,7 +94,7 @@ def _parse_expressions(parser: ExprParser) -> Result[ExprParser.StartContext, Er
         parser (ExprParser): Parser that will make sure tree is valid
     """
     try:
-        tree: ExprParser.StartContext = parser.start()  # type: ignore[no-untyped-call]
+        tree: ExprParser.StartContext = parser.start()
         return Success(tree)
     except ParseCancellationException as exception:
         msg = str(exception)
@@ -250,39 +250,6 @@ class ExpressionListener(ExprListener):
             raise Exception(ExpressionNegatorError(expr_type))
         self.type_stack.append(expr_type)
 
-    def exitArrayAccess(self, ctx: ExprParser.ArrayAccessContext) -> None:
-        """
-        Verify expressions using [] are valid, raise ExpressionRelationCompatabilityError otherwise
-
-        Args:
-            ctx (ExprParser.ArrayAccessContext): Type of node that parser is traversing through
-        """
-        array_node = antlr_get_terminal_node_impl(ctx.ID(0))
-        index_node = antlr_get_terminal_node_impl(ctx.ID(1))
-
-        array_name = antlr_get_text(array_node)
-        index_text = antlr_get_text(index_node)
-
-        array_type = self.state.get_type(array_name)
-        if not_(is_successful)(array_type):
-            raise Exception(ExpressionUnrecognizedID(array_name))
-
-        index_type = self.state.get_type(index_text)
-        if not_(is_successful)(index_type):
-            raise Exception(ExpressionUnrecognizedID(index_text))
-
-        if index_type.unwrap() not in {
-            typechecking.BIT,
-            typechecking.BYTE,
-            typechecking.SHORT,
-            typechecking.INT,
-        }:
-            raise Exception(
-                ExpressionRelationCompatabilityError(array_name, index_type.unwrap())
-            )
-
-        self.type_stack.append(array_type.unwrap())
-
     def enterID(self, ctx: ExprParser.IDContext) -> None:
         """
         Retrieve variable type of given ID, raise ExpressionUnrecognizedID otherwise
@@ -290,7 +257,7 @@ class ExpressionListener(ExprListener):
         Args:
             ctx (ExprParser.IDContext): Type of node that parser is traversing through
         """
-        node = antlr_get_terminal_node_impl(ctx.ID())  # type: ignore[no-untyped-call]
+        node = antlr_get_terminal_node_impl(ctx.ID())
         identifier = antlr_get_text(node)
         type = self.state.get_type(identifier)  # Variable type retrieval method
         if not_(is_successful)(type):
@@ -308,7 +275,7 @@ class ExpressionListener(ExprListener):
         """
         listener = ExpressionListener(state)
         try:
-            walker: ParseTreeWalker = ParseTreeWalker.DEFAULT
+            walker: ParseTreeWalker = cast(ParseTreeWalker, ParseTreeWalker.DEFAULT)
             walker.walk(listener, context)
             result: Result[str, Error] = Success(listener.final_type)
             return result

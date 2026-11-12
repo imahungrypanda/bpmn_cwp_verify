@@ -4,16 +4,9 @@ from bpmncwpverify.core.bpmn import Bpmn
 from bpmncwpverify.core.cwp import Cwp
 from bpmncwpverify.core.error import Error, NotInitializedError
 from bpmncwpverify.core.state import State
-from bpmncwpverify.util.stringmanager import (
-    NL_DOUBLE,
-    NL_SINGLE,
-    IndentAction,
-    StringManager,
-)
+from bpmncwpverify.util.stringmanager import NL_SINGLE, IndentAction, StringManager
 from bpmncwpverify.visitors.bpmn_promela_visitor import PromelaGenVisitor
 from bpmncwpverify.visitors.cwp_promela_visitor import CwpPromelaVisitor
-
-DEBUG_PROMELA = "#ifdef DEBUG\n#define DBG(x) x\n#else\n#define DBG(x)\n#endif\n\n"
 
 
 def _generate_bpmn_promela(bpmn: Bpmn) -> str:
@@ -29,40 +22,22 @@ def _generate_cwp_promela(cwp: Cwp, state: State) -> str:
 
 
 def _generate_logger(state: State, cwp: Cwp) -> str:
+    var_names = _get_variable_names(state)
     loggerFunction = StringManager()
 
     loggerFunction.write_str("inline stateLogger(){", NL_SINGLE, IndentAction.INC)
     loggerFunction.write_str('printf("Changed Vars: \\n")', NL_SINGLE)
-    for name in state.vars:
+    for name in var_names:
         loggerFunction.write_str("if", NL_SINGLE, IndentAction.INC)
         loggerFunction.write_str(
-            f":: {name.id} != old_{name.id} ->", NL_SINGLE, IndentAction.INC
+            f":: {name} != old_{name} ->", NL_SINGLE, IndentAction.INC
         )
         loggerFunction.write_str(
-            f'printf("{name.id} = {_get_print_type(name.type_)}\\n", {name.id})',
-            NL_SINGLE,
+            f'printf("{name} = {_get_print_type(name)}\\n", {name})', NL_SINGLE
         )
-        loggerFunction.write_str(f"old_{name.id} = {name.id}", NL_SINGLE)
+        loggerFunction.write_str(f"old_{name} = {name}", NL_SINGLE)
         loggerFunction.write_str(":: else", NL_SINGLE, IndentAction.DEC)
         loggerFunction.write_str("fi;", NL_SINGLE, IndentAction.DEC)
-
-    for array in state.arrays:
-        for i in range(len(array.values)):
-            loggerFunction.write_str("if", NL_SINGLE, IndentAction.INC)
-            loggerFunction.write_str(
-                f":: {array.id}[{i}] != old_{array.id}[{i}] ->",
-                NL_SINGLE,
-                IndentAction.INC,
-            )
-            loggerFunction.write_str(
-                f'printf("{array.id}[{i}] = {_get_print_type(array.type_)}\\n", {array.id}[{i}])',
-                NL_SINGLE,
-            )
-            loggerFunction.write_str(
-                f"old_{array.id}[{i}] = {array.id}[{i}]", NL_SINGLE
-            )
-            loggerFunction.write_str(":: else -> skip", NL_SINGLE, IndentAction.DEC)
-            loggerFunction.write_str("fi;", NL_SINGLE, IndentAction.DEC)
 
     for cwp_state in cwp.states.values():
         loggerFunction.write_str("if", NL_SINGLE, IndentAction.INC)
@@ -74,7 +49,7 @@ def _generate_logger(state: State, cwp: Cwp) -> str:
         )
         loggerFunction.write_str(":: else", NL_SINGLE, IndentAction.DEC)
         loggerFunction.write_str("fi;", NL_SINGLE, IndentAction.DEC)
-    loggerFunction.write_str("}", NL_DOUBLE, IndentAction.DEC)
+    loggerFunction.write_str("}", NL_SINGLE, IndentAction.DEC)
     return str(loggerFunction)
 
 
@@ -87,30 +62,17 @@ def _generate_state_dump(state: State) -> str:
             f'printf("{var.id} = {_get_print_type(var.type_)}\\n", {var.id})', NL_SINGLE
         )
 
-    for array in state.arrays:
-        valTypeList: str = ""
-        valDeclList: str = ""
-        comma: str = ", "
-        for i in range(len(array.values)):
-            if i == len(array.values) - 1:
-                comma = ""
-            valTypeList += f"{_get_print_type(array.type_)}" + comma
-            valDeclList += f"{array.id}[{i}]" + comma
-        state_dump.write_str(
-            f'printf("{array.id} = {{{valTypeList}}}", {valDeclList})', NL_SINGLE
-        )
-
-    state_dump.write_str("}", NL_DOUBLE, IndentAction.DEC)
+    state_dump.write_str("}", NL_SINGLE, IndentAction.DEC)
     return str(state_dump)
 
 
 def _generate_promela(state: State, cwp: Cwp, bpmn: Bpmn) -> Result[str, Error]:
     cwp_pml = _generate_cwp_promela(cwp, state)
-    state_dump_pml = _generate_state_dump(state)
-    logger_pml = _generate_logger(state, cwp)
     vars_pml = _generate_state_promela(state)
+    logger_pml = _generate_logger(state, cwp)
+    state_dump_pml = _generate_state_dump(state)
     bpmn_pml = _generate_bpmn_promela(bpmn)
-    pml = f"{DEBUG_PROMELA}{vars_pml}{cwp_pml}{logger_pml}{state_dump_pml}{bpmn_pml}"
+    pml = f"{vars_pml}{cwp_pml}{logger_pml}{state_dump_pml}{bpmn_pml}"
     return Success(pml)
 
 
@@ -123,59 +85,33 @@ def _generate_state_promela(state: State) -> str:
         str_builder.append(
             f"mtype:{enum_decl.id} = {{{' '.join(sorted([value.value for value in enum_decl.values]))}}}"
         )
-    for array_decl in state.arrays:
-        arrayBuilder: str = (
-            f"{array_decl.type_} {array_decl.id}[{array_decl.size}] = {{"
-        )
-        if "bit" not in array_decl.type_ and "bool" not in array_decl.type_:
-            hiddenBuilder: str = (
-                f"hidden {array_decl.type_} old_{array_decl.id}[{array_decl.size}] = {{"
-            )
-        else:
-            hiddenBuilder = (
-                f"{array_decl.type_} old_{array_decl.id}[{array_decl.size}] = {{"
-            )
-
-        index: int = 0
-        comma: str = ", "
-        for valDecl in array_decl.values:
-            if index == len(array_decl.values) - 1:
-                comma = ""
-            arrayBuilder += f"{valDecl.value}{comma}"
-            hiddenBuilder += f"{valDecl.value}{comma}"
-            index += 1
-        str_builder.append(arrayBuilder + "}")
-        str_builder.append(hiddenBuilder + "}")
     for var_decl in state.vars:
         if var_decl.type_ in {enum.id for enum in state.enums}:
             str_builder.append(
                 f"mtype:{var_decl.type_} {var_decl.id} = {var_decl.init.value}"
             )
-            if "bit" not in var_decl.type_:
-                str_builder.append(
-                    f"hidden mtype:{var_decl.type_} old_{var_decl.id} = {var_decl.id}"
-                )
+            str_builder.append(
+                f"mtype:{var_decl.type_} old_{var_decl.id} = {var_decl.id}"
+            )
         else:
             str_builder.append(
                 f"{var_decl.type_} {var_decl.id} = {var_decl.init.value}"
             )
-
-            if "bit" not in var_decl.type_ and "bool" not in var_decl.type_:
-                str_builder.append(
-                    f"hidden {var_decl.type_} old_{var_decl.id} = {var_decl.id}"
-                )
-            else:
-                str_builder.append(
-                    f"{var_decl.type_} old_{var_decl.id} = {var_decl.id}"
-                )
-
+            str_builder.append(f"{var_decl.type_} old_{var_decl.id} = {var_decl.id}")
     return "\n".join(str_builder) + "\n\n"
+
+
+def _get_variable_names(state: State) -> list[str]:
+    variableNames: list[str] = []
+    for var in state.vars:
+        variableNames.append(var.id)
+    return variableNames
 
 
 def _get_print_type(type: str) -> str:
     match type:
         case "bit":
-            return "%d"
+            return "%u"
         case "bool":
             return "%d"
         case "byte":

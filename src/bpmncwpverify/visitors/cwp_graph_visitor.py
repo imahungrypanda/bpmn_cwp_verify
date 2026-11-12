@@ -1,4 +1,4 @@
-import graphviz  # pyright: ignore[reportMissingTypeStubs]
+import graphviz
 
 from bpmncwpverify.core.cwp import CwpEdge, CwpState, CwpVisitor
 from bpmncwpverify.visitors.bpmn_graph_visitor import dot_edge, dot_node
@@ -19,9 +19,7 @@ class CwpGraphVizVisitor(CwpVisitor):
 
     def visit_edge(self, edge: CwpEdge) -> bool:
         if edge.source:
-            dot_edge(
-                self.dot, edge.source.name, edge.dest.name, label=str(edge.expression)
-            )
+            dot_edge(self.dot, edge.source.name, edge.dest.name, label=edge.expression)
         else:
-            dot_edge(self.dot, "start", edge.dest.name, label=str(edge.expression))
+            dot_edge(self.dot, "start", edge.dest.name, label=edge.expression)
         return True

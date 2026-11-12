@@ -5,6 +5,7 @@ import pytest
 from returns.maybe import Nothing, Some
 
 from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedElementError,
     BpmnFlowIncomingError,
     BpmnFlowNoIdError,
     BpmnFlowOutgoingError,
@@ -29,10 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
-    BpmnUnsupportedStartEvent,
     CbmcAssertionError,
-    CbmcReachabilityError,
-    CbmcSubProcessError,
+    CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -45,15 +46,22 @@ from bpmncwpverify.core.error import (
     CwpUnsupportedElementError,
     Error,
     ExpressionComputationCompatabilityError,
-    ExpressionIfBranchCompatabilityError,
-    ExpressionIfConditionError,
     ExpressionNegatorError,
-    ExpressionOutOfScope,
     ExpressionParseError,
     ExpressionRelationalNotError,
     ExpressionRelationCompatabilityError,
-    ExpressionTripleInputError,
     ExpressionUnrecognizedID,
+    FeelAssignTypeError,
+    FeelBehaviorTypeError,
+    FeelCbmcUnsupportedError,
+    FeelConditionTypeError,
+    FeelInvalidTargetError,
+    FeelMixedTypesError,
+    FeelNumberTypeError,
+    FeelOperatorTypeError,
+    FeelSyntaxError,
+    FeelUnknownNameError,
+    FeelUnsupportedError,
     FileReadFileError,
     FileWriteFileError,
     FileXmlParseError,
@@ -66,24 +74,16 @@ from bpmncwpverify.core.error import (
     SpinInvalidEndStateError,
     SpinSyntaxError,
     StateAntlrWalkerError,
-    StateArraySizeError,
     StateInitNotInValues,
     StateMultipleDefinitionError,
     StateSyntaxError,
     SubProcessRunError,
     TypingAssignCompatabilityError,
-    TypingListCompatibiltiyError,
-    TypingListOfExpressionsError,
     TypingNoTypeError,
-    TypingTripleVariableError,
     get_error_message,
 )
 
 test_inputs: list[tuple[Error, str]] = [
-    (
-        BpmnUnsupportedStartEvent("Event_342dt"),
-        "Bpmn error: Event_342dt is not a supported start event",
-    ),
     (
         BpmnNoElementNameError(["Event_4kd93"]),
         "Bpmn error: ['Event_4kd93'] must have a name that is different from their ID.",
@@ -181,6 +181,14 @@ test_inputs: list[tuple[Error, str]] = [
         "BPMN ERROR: Unrecognized bpmn element type in workflow: element_name",
     ),
     (
+        BpmnCbmcUnsupportedElementError("id", "boundary event"),
+        "BPMN ERROR: boundary event 'id' cannot be expressed in C for CBMC.",
+    ),
+    (
+        CbmcBuildError("bad type"),
+        "CBMC ERROR: Could not build C for CBMC: bad type.",
+    ),
+    (
         CwpEdgeNoParentExprError(mock.Mock(attrib="edge_attrib")),
         "CWP ERROR: Expression or parent node not found in edge. Edge details: edge_attrib.",
     ),
@@ -218,11 +226,28 @@ test_inputs: list[tuple[Error, str]] = [
     ),
     (
         ExpressionComputationCompatabilityError("ltype", "rtype"),
-        "EXPR ERROR: something of type 'rtype' cannot be computed with something of type 'ltype'",
+        "EXPR ERROR: sometion of type 'rtype' cannot be computed with something of type 'ltype'",
     ),
     (
         ExpressionNegatorError("_type"),
         "EXPR ERROR: sometiong of type '_type' cannot be used with a mathmatical negator",
+    ),
+    (
+        CbmcAssertionError(
+            [
+                {"description": "token placed on an occupied place", "line": "10"},
+                {"description": "CWP: not a valid CWP transition", "line": "20"},
+            ]
+        ),
+        "CBMC ERROR: Assertion failed:\n2 failure(s) occurred:\n1: token placed on an occupied place (line 10)\n2: CWP: not a valid CWP transition (line 20)",
+    ),
+    (
+        CbmcRunError("cbmc not found"),
+        "CBMC ERROR: Could not run CBMC: cbmc not found.",
+    ),
+    (
+        CbmcUnreachableError(["CWP state: A", "end event: B"]),
+        "CBMC ERROR: Unreachable:\n2 item(s) never reached by the workflow:\n1: CWP state: A\n2: end event: B",
     ),
     (
         ExpressionParseError("exception_str"),
@@ -230,31 +255,59 @@ test_inputs: list[tuple[Error, str]] = [
     ),
     (
         ExpressionRelationCompatabilityError("ltype", "rtype"),
-        "EXPR ERROR: something of type 'rtype' cannot be related with something of type 'ltype'",
-    ),
-    (
-        ExpressionIfBranchCompatabilityError("thentype", "elsetype"),
-        "EXPR ERROR: if must have same or compatible return types on branchs,'thentype' and 'elsetype' are not compatible",
-    ),
-    (
-        ExpressionIfConditionError("type"),
-        "EXPR ERROR: if statement must have a conditional expression result in a bool, not a 'type'",
+        "EXPR ERROR: sometion of type 'rtype' cannot be related with something of type 'ltype'",
     ),
     (
         ExpressionRelationalNotError("_type"),
-        "EXPR ERROR: something of type '_type' cannot be used with a relational not",
+        "EXPR ERROR: sometiong of type '_type' cannot be used with a relational not",
     ),
     (
         ExpressionUnrecognizedID("_id"),
         "EXPR ERROR: '_id' is not recognized as a literal or something stored in the symbol table",
     ),
     (
-        ExpressionOutOfScope("id"),
-        "EXPR ERROR: 'id' is out of scope",
+        FeelSyntaxError("line 1:2 bad"),
+        "FEEL SYNTAX ERROR: line 1:2 bad",
     ),
     (
-        ExpressionTripleInputError(),
-        "EXPR ERROR: input in triple is not valid and can only be a list of varibles",
+        FeelUnsupportedError("a string", 1, 2),
+        "FEEL ERROR: a string (line 1:2) is not supported; only numbers, booleans, names, lists, arithmetic, comparisons, logic, 'if', 'choose' and triples can be used",
+    ),
+    (
+        FeelCbmcUnsupportedError("a list", 1, 2),
+        "FEEL ERROR: a list (line 1:2) cannot be expressed in C for CBMC",
+    ),
+    (
+        FeelAssignTypeError("x", "byte", "bool", 1, 2),
+        "FEEL TYPE ERROR: (line 1:2) 'x' has type 'byte' and cannot be assigned a value of type 'bool'",
+    ),
+    (
+        FeelBehaviorTypeError("bool"),
+        "FEEL TYPE ERROR: a behavior must be a triple or a parenthesized list of triples, not something of type 'bool'",
+    ),
+    (
+        FeelConditionTypeError("byte", 1, 2),
+        "FEEL TYPE ERROR: (line 1:2) a condition must be a bool, not 'byte'",
+    ),
+    (
+        FeelInvalidTargetError("c", "it is not a variable", 1, 2),
+        "FEEL TYPE ERROR: (line 1:2) 'c' cannot be assigned: it is not a variable",
+    ),
+    (
+        FeelMixedTypesError("a choose", ("bool", "byte"), 1, 2),
+        "FEEL TYPE ERROR: (line 1:2) the items of a choose must have compatible types, found bool, byte",
+    ),
+    (
+        FeelNumberTypeError("2.5", 1, 2),
+        "FEEL TYPE ERROR: (line 1:2) '2.5' is not an integer that fits in an int",
+    ),
+    (
+        FeelOperatorTypeError("+", ("bool", "byte"), 1, 2),
+        "FEEL TYPE ERROR: (line 1:2) '+' cannot be applied to bool, byte",
+    ),
+    (
+        FeelUnknownNameError("q", 1, 2),
+        "FEEL TYPE ERROR: (line 1:2) 'q' is not a variable, constant or enum value",
     ),
     (
         FileReadFileError("file_name"),
@@ -293,11 +346,11 @@ test_inputs: list[tuple[Error, str]] = [
                 }
             ],
         ),
-        "Spin Coverage Error:\nProctype: test_proctype, File: test_file, Line: test_line, Message: test_message",
+        "Proctype: test_proctype, File: test_file, Line: test_line, Message: test_message",
     ),
     (
         SpinInvalidEndStateError("", [{"info": "test_info1"}, {"info": "test_info2"}]),
-        "Invalid end state\n2 error(s) occurred:\n1: test_info1\n2: test_info2\n",
+        "Invalid end state\n2 error(s) occurred:\n1: test_info1\n2: test_info2",
     ),
     (
         SpinSyntaxError(
@@ -314,14 +367,6 @@ test_inputs: list[tuple[Error, str]] = [
     (
         StateAntlrWalkerError("error"),
         "STATE ERROR: error",
-    ),
-    (
-        StateArraySizeError("array_name", Some(0), Some(12), 5, 4),
-        "STATE ARRAY SIZE ERROR: array 'array_name' at line 0:12 has size 4, expected size 5",
-    ),
-    (
-        StateArraySizeError("array_name", Some(0), Some(12), 0, 0),
-        "STATE ARRAY SIZE ERROR: array 'array_name' at line 0:12. Array size must be greater than 0.",
     ),
     (
         StateInitNotInValues("a", Some(0), Some(1), {"b", "c"}),
@@ -349,55 +394,10 @@ test_inputs: list[tuple[Error, str]] = [
         "TYPING ERROR: something of type 'int' cannot by assigned to something of type 'enum'",
     ),
     (SubProcessRunError("proc"), "ERROR: failed to run 'proc'"),
-    (
-        TypingListCompatibiltiyError("first_type", "second_type"),
-        "TYPING ERROR: list of type 'first_type' is not compatible with 'second_type'",
-    ),
-    (
-        TypingListOfExpressionsError(),
-        "TYPING ERROR: list has an expresssion that is not a number, bool, or variable and is not allowed",
-    ),
-    (
-        TypingTripleVariableError("id"),
-        "TYPING ERROR: 'id' is not a variable and cannot be used as input",
-    ),
     (TypingNoTypeError("a"), "TYPING ERROR: literal 'a' has an unknown type"),
-    (
-        CbmcAssertionError(
-            [
-                "[update_cwp_state.assertion.1] line 83 CWP P1: transition follows valid CWP edge: FAILURE",
-                "[main.unwind.0] unwinding assertion loop 0: FAILURE",
-            ]
-        ),
-        "CBMC CORRECTNESS FAILURE (P1-P3):\n"
-        "  2 failing assertion(s):\n"
-        "  1. line 83: CWP P1: transition follows valid CWP edge\n"
-        "  2. [main.unwind.0] unwinding assertion loop 0: FAILURE",
-    ),
-    (
-        # Covers all three label branches: end-event goal ('Event_<id>_reached'),
-        # CWP-state goal ('cwp_reached[...]'), and the unparseable fallback.
-        CbmcReachabilityError(
-            [
-                "[main.coverage.1] file ./tmp/verification.c line 299 function main condition 'Event_1y6wxsp_reached != FALSE': FAILED",
-                "[main.coverage.3] file ./tmp/verification.c line 301 function main condition 'cwp_reached[(signed long int)2] != FALSE': FAILED",
-                "[main.coverage.9] FAILED",
-            ]
-        ),
-        "CBMC REACHABILITY FAILURE (P4 - unreachable goals):\n"
-        "  3 goal(s) not covered:\n"
-        "  1. line 299: end event 'Event_1y6wxsp' unreachable\n"
-        "  2. line 301: CWP state 2 unreachable\n"
-        "  3. [main.coverage.9] FAILED",
-    ),
-    (
-        CbmcSubProcessError("cbmc --cover"),
-        "CBMC ERROR: failed to run 'cbmc --cover'",
-    ),
 ]
 
 test_ids: list[str] = [
-    "BpmnUnsupportedStartEvent",
     "BpmnNoElementNameError",
     "BpmnNoSwimLaneNameError",
     "BpmnFlowIncomingError",
@@ -422,6 +422,11 @@ test_ids: list[str] = [
     "BpmnStructureError",
     "BpmnTaskFlowError",
     "BpmnUnrecognizedElement",
+    "BpmnCbmcUnsupportedElementError",
+    "CbmcAssertionError",
+    "CbmcBuildError",
+    "CbmcRunError",
+    "CbmcUnreachableError",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
     "CwpFileStructureError",
@@ -436,11 +441,18 @@ test_ids: list[str] = [
     "ExpressionParseError",
     "ExpressionRelationCompatabilityError",
     "ExpressionRelationalNotError",
-    "ExpressionIfBranchCompatabilityError",
-    "ExpressionIfConditionError",
     "ExpressionUnrecognizedID",
-    "ExpressionOutOfScope",
-    "ExpressionTripleInputError",
+    "FeelSyntaxError",
+    "FeelUnsupportedError",
+    "FeelCbmcUnsupportedError",
+    "FeelAssignTypeError",
+    "FeelBehaviorTypeError",
+    "FeelConditionTypeError",
+    "FeelInvalidTargetError",
+    "FeelMixedTypesError",
+    "FeelNumberTypeError",
+    "FeelOperatorTypeError",
+    "FeelUnknownNameError",
     "FileReadFileError",
     "FileWriteFileError",
     "FileXmlParseError",
@@ -453,8 +465,6 @@ test_ids: list[str] = [
     "SpinInvalidEndStateError",
     "SpinSyntaxError",
     "StateAntlrWalkerError",
-    "StateArraySizeMissmatchError",
-    "StateArraySizeZeroError",
     "StateInitNotInValues",
     "StateInitNotInValuesLineCol",
     "StateMultipleDefinitionError",
@@ -463,13 +473,7 @@ test_ids: list[str] = [
     "StateSyntaxError",
     "SubprocessRunError",
     "TypeingAssignCompatabilityError",
-    "TypingListCompatibiltiyError",
-    "TypingListOfExpressionsError",
-    "TypingTripleVariableError",
     "TypingNoTypeError",
-    "CbmcAssertionError",
-    "CbmcReachabilityError",
-    "CbmcSubProcessError",
 ]
 
 

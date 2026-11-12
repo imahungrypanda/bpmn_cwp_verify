@@ -1,309 +1,231 @@
+# type: ignore
+import subprocess
+
 import pytest
+from returns.result import Failure, Success
 
-from bpmncwpverify.core.error import CbmcUnsupportedElementError, ErrorException
-from bpmncwpverify.core.feel_tree import (
-    AddNode,
-    AndNode,
-    BoolLiteralNode,
-    ChooseNode,
-    DivideNode,
-    EqualNode,
-    GENode,
-    GTNode,
-    IfNode,
-    LENode,
-    ListNode,
-    LTNode,
-    MultiplyNode,
-    NotEqualNode,
-    NotNode,
-    NumberLiteralNode,
-    OrNode,
-    PowerNode,
-    QualifiedNameNode,
-    SubtractNode,
-    TripleListNode,
-    TripleNode,
-    XOrNode,
+from bpmncwpverify.core.error import FeelCbmcUnsupportedError
+from bpmncwpverify.core.feel import parse, type_check_behavior, type_check_condition
+from bpmncwpverify.core.state import State
+from bpmncwpverify.visitors.feel_to_cbmc_visitor import (
+    behavior_to_c,
+    condition_to_c,
 )
-from bpmncwpverify.visitors.feel_to_cbmc_visitor import FeelToCbmcVisitor
+
+STATE = """
+enum Door {open closed}
+enum Light {on off}
+const limit: byte = 3
+var door: Door = closed
+var light: Light = off
+var count: byte = 0
+var big: int = 0
+var flag: bool = false
+"""
+
+DECLS = """#include <stdbool.h>
+unsigned int nondet_uint(void);
+#define limit 3
+typedef enum { open, closed } Door;
+typedef enum { on, off } Light;
+Door door = closed;
+Light light = off;
+unsigned char count = 0;
+int big = 0;
+bool flag = false;
+"""
 
 
-def test_list() -> None:
-    node = ListNode(
-        [NumberLiteralNode("2"), NumberLiteralNode("1"), NumberLiteralNode("0")]
-    )
-    visitor = FeelToCbmcVisitor("")
-
-    node.accept(visitor)
-
-    assert visitor.expr == "{2, 1, 0}"
+@pytest.fixture(scope="module")
+def state() -> State:
+    return State.from_str(STATE).unwrap()
 
 
-def test_add() -> None:
-    node = AddNode(NumberLiteralNode("2"), QualifiedNameNode("3"))
-    visitor = FeelToCbmcVisitor("")
-
-    node.accept(visitor)
-
-    assert visitor.expr == "(2 + 3)"
+def cond(text, state):
+    parsed = parse(text).unwrap()
+    assert isinstance(type_check_condition(parsed, state), Success), text
+    return condition_to_c(parsed)
 
 
-def test_multiply_and_add() -> None:
-    node = AddNode(
-        NumberLiteralNode("5"),
-        MultiplyNode(NumberLiteralNode("2"), QualifiedNameNode("3")),
-    )
-    visitor = FeelToCbmcVisitor("")
-
-    node.accept(visitor)
-
-    assert visitor.expr == "(5 + (2 * 3))"
-
-
-def test_subtract_and_divide() -> None:
-    node = SubtractNode(
-        DivideNode(NumberLiteralNode("4"), NumberLiteralNode("2")),
-        NumberLiteralNode("1"),
-    )
-    visitor = FeelToCbmcVisitor("")
-
-    node.accept(visitor)
-
-    assert visitor.expr == "((4 / 2) - 1)"
-
-
-def test_power_node_raises() -> None:
-    node = PowerNode(NumberLiteralNode("2"), NumberLiteralNode("3"))
-    visitor = FeelToCbmcVisitor("")
-
-    with pytest.raises(ErrorException):
-        node.accept(visitor)
-
-
-def test_and() -> None:
-    node = AndNode(BoolLiteralNode("true"), QualifiedNameNode("something"))
-    visitor = FeelToCbmcVisitor("")
-
-    node.accept(visitor)
-
-    assert visitor.expr == "(true && something)"
-
-
-def test_or() -> None:
-    node = OrNode(QualifiedNameNode("x"), QualifiedNameNode("y"))
-    visitor = FeelToCbmcVisitor("")
-
-    node.accept(visitor)
-
-    assert visitor.expr == "(x || y)"
-
-
-def test_xor() -> None:
-    node = XOrNode(QualifiedNameNode("X"), QualifiedNameNode("Y"))
-    visitor = FeelToCbmcVisitor("")
-
-    node.accept(visitor)
-
-    assert visitor.expr == "(X != Y)"
-
-
-def test_or_and() -> None:
-    node = OrNode(
-        AndNode(QualifiedNameNode("this"), QualifiedNameNode("that")),
-        XOrNode(QualifiedNameNode("this"), QualifiedNameNode("notthis")),
-    )
-    visitor = FeelToCbmcVisitor("")
-
-    node.accept(visitor)
-
-    assert visitor.expr == "((this && that) || (this != notthis))"
+def behavior(text, state):
+    parsed = parse(text).unwrap()
+    assert isinstance(type_check_behavior(parsed, state), Success), text
+    return behavior_to_c(parsed)
 
 
 @pytest.mark.parametrize(
-    "node_cls,op",
+    "text, expected",
     [
-        (LTNode, " < "),
-        (GTNode, " > "),
-        (LENode, " <= "),
-        (GENode, " >= "),
-        (EqualNode, " == "),
-        (NotEqualNode, " != "),
+        ("true", "true"),
+        ("false", "false"),
+        ("flag", "flag"),
+        ("count < 3", "(count < 3)"),
+        ("count <= limit", "(count <= limit)"),
+        ("big > 1", "(big > 1)"),
+        ("big >= 1", "(big >= 1)"),
+        ("door = open", "(door == open)"),
+        ("door != open", "(door != open)"),
+        ("big + 1 = 2", "((big + 1) == 2)"),
+        ("big - 1 = 2", "((big - 1) == 2)"),
+        ("big * 2 = 2", "((big * 2) == 2)"),
+        ("big / 2 = 2", "((big / 2) == 2)"),
+        ("-big < 0", "((-big) < 0)"),
+        ("big ** 2 = 4", "((big * big) == 4)"),
+        ("big ** 0 = 1", "(1 == 1)"),
+        ("not flag", "(!flag)"),
+        ("flag and true", "(flag && true)"),
+        ("flag or true", "(flag || true)"),
+        ("flag xor true", "(flag != true)"),
+        ("door = open and count < 3", "((door == open) && (count < 3))"),
+        ("(if flag then big else 2) = 2", "((flag ? big : 2) == 2)"),
+        ("(big + 1) * 2 = 4", "(((big + 1) * 2) == 4)"),
     ],
 )
-def test_comparisons(node_cls, op) -> None:
-    node = node_cls(QualifiedNameNode("a"), QualifiedNameNode("b"))
-    visitor = FeelToCbmcVisitor("")
-
-    node.accept(visitor)
-
-    assert visitor.expr == f"(a{op}b)"
+def test_condition(state, text, expected):
+    assert cond(text, state) == Success(expected)
 
 
-def test_not() -> None:
-    node = NotNode(BoolLiteralNode("true"))
-    visitor = FeelToCbmcVisitor("")
-
-    node.accept(visitor)
-
-    assert visitor.expr == "!true"
+def test_xor_of_comparisons_is_logical(state):
+    # 2 and 1 are both true, so xor is false even though 2 != 1
+    assert cond("(big > 0) xor (big > 1)", state) == Success("((big > 0) != (big > 1))")
 
 
-def test_true_and_not_false() -> None:
-    node = AndNode(BoolLiteralNode("true"), NotNode(BoolLiteralNode("false")))
-    visitor = FeelToCbmcVisitor("")
+@pytest.mark.parametrize(
+    "text, construct",
+    [
+        ("choose [true, false] = flag", "choose"),
+        ("big ** count = 1", "'**'"),
+        ("big ** 9 = 1", "'**'"),
+        ("big ** -1 = 1", "'**'"),
+    ],
+)
+def test_condition_unsupported(state, text, construct):
+    parsed = parse(text).unwrap()
+    result = condition_to_c(parsed)
+    assert isinstance(result, Failure)
+    assert isinstance(result.failure(), FeelCbmcUnsupportedError)
+    assert construct in result.failure().construct
 
-    node.accept(visitor)
 
-    assert visitor.expr == "(true && !false)"
+def test_list_is_unsupported():
+    result = condition_to_c(parse("[1, 2]").unwrap())
+    assert isinstance(result.failure(), FeelCbmcUnsupportedError)
+    assert result.failure().construct == "a list"
 
 
-def test_if_ternary() -> None:
-    node = IfNode(
-        QualifiedNameNode("blackBox"),
-        QualifiedNameNode("missing"),
-        QualifiedNameNode("found"),
+def test_float_is_unsupported():
+    result = condition_to_c(parse("2.5").unwrap())
+    assert isinstance(result.failure(), FeelCbmcUnsupportedError)
+
+
+def test_non_behavior_is_unsupported():
+    result = behavior_to_c(parse("1").unwrap())
+    assert isinstance(result.failure(), FeelCbmcUnsupportedError)
+
+
+def test_triple(state):
+    assert behavior("(door, [], open)", state) == Success(["{", "  door = open;", "}"])
+
+
+def test_triple_inputs_are_not_in_the_c(state):
+    assert behavior("(count, [count], count + 1)", state) == Success(
+        ["{", "  count = (count + 1);", "}"]
     )
-    visitor = FeelToCbmcVisitor("")
-
-    node.accept(visitor)
-
-    assert visitor.expr == "(blackBox ? missing : found)"
 
 
-def test_if_statement_block_raises() -> None:
-    node = IfNode(
-        QualifiedNameNode("cond"),
-        TripleNode(QualifiedNameNode("x"), ListNode([]), NumberLiteralNode("1")),
-        TripleNode(QualifiedNameNode("y"), ListNode([]), NumberLiteralNode("2")),
+def test_triple_list_runs_in_order(state):
+    result = behavior(
+        "((light, [], choose [on, off]), (count, [count], count + 1))", state
     )
-    visitor = FeelToCbmcVisitor("task1")
-
-    with pytest.raises(ErrorException) as excinfo:
-        node.accept(visitor)
-
-    assert isinstance(excinfo.value.error, CbmcUnsupportedElementError)
-
-
-def test_choose() -> None:
-    node = ChooseNode(
-        ListNode([QualifiedNameNode("agreed"), QualifiedNameNode("failed")])
-    )
-    visitor = FeelToCbmcVisitor("Activity_1")
-
-    node.accept(visitor)
-
-    assert visitor.stmts == [
-        "int t_choose_Activity_1_0 = nondet_int();",
-        "__CPROVER_assume(t_choose_Activity_1_0 == agreed || t_choose_Activity_1_0 == failed);",
-    ]
-    assert visitor.expr == "t_choose_Activity_1_0"
-
-
-def test_choose_unique_names_multiple_occurrences() -> None:
-    node = TripleListNode(
+    assert result == Success(
         [
-            TripleNode(
-                QualifiedNameNode("terms"),
-                ListNode([]),
-                ChooseNode(
-                    ListNode([QualifiedNameNode("agreed"), QualifiedNameNode("failed")])
-                ),
-            ),
-            TripleNode(
-                QualifiedNameNode("payment"),
-                ListNode([]),
-                ChooseNode(
-                    ListNode([QualifiedNameNode("paid"), QualifiedNameNode("unpaid")])
-                ),
-            ),
+            "{",
+            "  unsigned int feel_choice_0 = nondet_uint();",
+            "  __CPROVER_assume(feel_choice_0 < 2u);",
+            "  light = (feel_choice_0 == 0u ? on : off);",
+            "}",
+            "{",
+            "  count = (count + 1);",
+            "}",
         ]
     )
-    visitor = FeelToCbmcVisitor("Activity_1")
-
-    node.accept(visitor)
-
-    assert visitor.stmts == [
-        "int t_choose_Activity_1_0 = nondet_int();",
-        "__CPROVER_assume(t_choose_Activity_1_0 == agreed || t_choose_Activity_1_0 == failed);",
-        "terms = t_choose_Activity_1_0;",
-        "int t_choose_Activity_1_1 = nondet_int();",
-        "__CPROVER_assume(t_choose_Activity_1_1 == paid || t_choose_Activity_1_1 == unpaid);",
-        "payment = t_choose_Activity_1_1;",
-    ]
 
 
-def test_triple() -> None:
-    node = TripleNode(
-        QualifiedNameNode("uuvComms"), ListNode([]), QualifiedNameNode("sent")
+def test_choose_with_three_options_and_nesting(state):
+    lines = behavior("(big, [], (choose [1, 2, 3]) + choose [10, 20])", state).unwrap()
+    text = "\n".join(lines)
+    assert "feel_choice_0 < 3u" in text
+    assert "feel_choice_1 < 2u" in text
+    assert "(feel_choice_0 == 0u ? 1 : (feel_choice_0 == 1u ? 2 : 3))" in text
+
+
+def test_choose_with_one_option_needs_no_selector(state):
+    assert behavior("(big, [], choose [7])", state) == Success(["{", "  big = 7;", "}"])
+
+
+def test_if_in_triple(state):
+    assert behavior("(big, [flag], if flag then 1 else 2)", state) == Success(
+        ["{", "  big = (flag ? 1 : 2);", "}"]
     )
-    visitor = FeelToCbmcVisitor("")
-
-    node.accept(visitor)
-
-    assert visitor.stmts == ["uuvComms = sent;"]
 
 
-def test_triple_inputs_ignored() -> None:
-    node = TripleNode(
-        QualifiedNameNode("uuvComms"),
-        ListNode([QualifiedNameNode("x")]),
-        QualifiedNameNode("sent"),
+def run_cbmc(tmp_path, body, extra=""):
+    src = tmp_path / "model.c"
+    src.write_text(f"{DECLS}\nint main(void) {{\n{body}\n{extra}\nreturn 0;\n}}\n")
+    return subprocess.run(
+        ["cbmc", str(src)],
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
+def test_generated_c_compiles_and_runs_in_cbmc(tmp_path, state):
+    lines = behavior(
+        "((light, [], choose [on, off]), (count, [count], count + 1),"
+        " (big, [count], if count = 1 then count ** 2 else 5))",
+        state,
+    ).unwrap()
+    out = run_cbmc(
+        tmp_path,
+        "\n".join(lines),
+        '__CPROVER_assert(count == 1 && big == 1, "later triples see earlier");',
     )
-    visitor = FeelToCbmcVisitor("")
-
-    node.accept(visitor)
-
-    assert visitor.stmts == ["uuvComms = sent;"]
+    assert "VERIFICATION SUCCESSFUL" in out
 
 
-def test_triple_with_choose() -> None:
-    node = TripleNode(
-        QualifiedNameNode("comms"),
-        ListNode([]),
-        ChooseNode(
-            ListNode([QualifiedNameNode("standby"), QualifiedNameNode("waiting")])
-        ),
+def test_cbmc_reaches_each_choice(tmp_path, state):
+    lines = behavior("(count, [], choose [1, 2, 3])", state).unwrap()
+    for value in (1, 2, 3):
+        out = run_cbmc(
+            tmp_path,
+            "\n".join(lines),
+            f'__CPROVER_assert(count != {value}, "reached {value}");',
+        )
+        assert "VERIFICATION FAILED" in out, value
+    out = run_cbmc(
+        tmp_path,
+        "\n".join(lines),
+        '__CPROVER_assert(count >= 1 && count <= 3, "only the options");',
     )
-    visitor = FeelToCbmcVisitor("Activity_1")
-
-    node.accept(visitor)
-
-    assert visitor.stmts == [
-        "int t_choose_Activity_1_0 = nondet_int();",
-        "__CPROVER_assume(t_choose_Activity_1_0 == standby || t_choose_Activity_1_0 == waiting);",
-        "comms = t_choose_Activity_1_0;",
-    ]
+    assert "VERIFICATION SUCCESSFUL" in out
 
 
-def test_triple_with_if_ternary_value() -> None:
-    node = TripleNode(
-        QualifiedNameNode("blackBox"),
-        ListNode([]),
-        IfNode(
-            EqualNode(QualifiedNameNode("uuvComms"), QualifiedNameNode("wait")),
-            QualifiedNameNode("missing"),
-            QualifiedNameNode("found"),
-        ),
+def test_cbmc_reaches_each_enum_choice(tmp_path, state):
+    lines = behavior("(light, [], choose [on, off])", state).unwrap()
+    for value in ("on", "off"):
+        out = run_cbmc(
+            tmp_path,
+            "light = on; " + "\n".join(lines),
+            f'__CPROVER_assert(light != {value}, "reached {value}");',
+        )
+        assert "VERIFICATION FAILED" in out, value
+
+
+def test_cbmc_condition(tmp_path, state):
+    c = cond("door = open and count < 3", state).unwrap()
+    out = run_cbmc(
+        tmp_path,
+        f'door = open; count = 2; __CPROVER_assert({c}, "holds");'
+        f' count = 3; __CPROVER_assert(!{c}, "fails");',
     )
-    visitor = FeelToCbmcVisitor("")
-
-    node.accept(visitor)
-
-    assert visitor.stmts == ["blackBox = ((uuvComms == wait) ? missing : found);"]
-
-
-def test_triple_list() -> None:
-    node = TripleListNode(
-        [
-            TripleNode(
-                QualifiedNameNode("uuvComms"), ListNode([]), QualifiedNameNode("sent")
-            ),
-            TripleNode(QualifiedNameNode("x"), ListNode([]), QualifiedNameNode("y")),
-        ]
-    )
-    visitor = FeelToCbmcVisitor("")
-
-    node.accept(visitor)
-
-    assert visitor.stmts == ["uuvComms = sent;", "x = y;"]
+    assert "VERIFICATION SUCCESSFUL" in out

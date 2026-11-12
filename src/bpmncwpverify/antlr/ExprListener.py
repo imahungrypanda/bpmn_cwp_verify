@@ -143,24 +143,6 @@ class ExprListener(ParseTreeListener):
         pass
 
 
-    # Enter a parse tree produced by ExprParser#ToPostfix.
-    def enterToPostfix(self, ctx:ExprParser.ToPostfixContext):
-        pass
-
-    # Exit a parse tree produced by ExprParser#ToPostfix.
-    def exitToPostfix(self, ctx:ExprParser.ToPostfixContext):
-        pass
-
-
-    # Enter a parse tree produced by ExprParser#ArrayAccess.
-    def enterArrayAccess(self, ctx:ExprParser.ArrayAccessContext):
-        pass
-
-    # Exit a parse tree produced by ExprParser#ArrayAccess.
-    def exitArrayAccess(self, ctx:ExprParser.ArrayAccessContext):
-        pass
-
-
     # Enter a parse tree produced by ExprParser#ToAtom.
     def enterToAtom(self, ctx:ExprParser.ToAtomContext):
         pass
