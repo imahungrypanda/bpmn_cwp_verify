@@ -1,12 +1,16 @@
 import re
 
+from returns.result import Failure, Result, Success
+
 from bpmncwpverify.core.cwp import Cwp, CwpEdge, CwpState, CwpVisitor
+from bpmncwpverify.core.error import Error, FeelCbmcUnsupportedError
 from bpmncwpverify.util.stringmanager import (
     NL_DOUBLE,
     NL_SINGLE,
     IndentAction,
     StringManager,
 )
+from bpmncwpverify.visitors.feel_to_cbmc_visitor import condition_to_c
 
 START_STR = "//**********CWP VARIABLE DECLARATION************//"
 END_STR = "//**********************************************//"
@@ -22,8 +26,15 @@ def _c_name(state: CwpState) -> str:
     return STATE_PREFIX + re.sub(r"\W", "_", state.name)
 
 
-def _edge_expr(edge: CwpEdge) -> str:
-    return f"({edge.expression})" if edge.expression.strip() else "1"
+def _edge_expr(edge: CwpEdge, errors: list[Error]) -> str:
+    """The C condition of an edge; an edge without a condition always holds."""
+    if edge.expression_tree is None:
+        return "1"
+    condition = condition_to_c(edge.expression_tree)
+    if isinstance(condition, Failure):
+        errors.append(condition.failure())
+        return "1"
+    return condition.unwrap()
 
 
 class CwpCbmcVisitor(CwpVisitor):
@@ -45,18 +56,22 @@ class CwpCbmcVisitor(CwpVisitor):
     name, so those must be declared before this code. It uses `__CPROVER_assert`.
     """
 
-    __slots__ = ["states", "enum_values", "active_checks", "valid_moves"]
+    __slots__ = ["active_checks", "enum_values", "errors", "states", "valid_moves"]
 
     def __init__(self) -> None:
         self.states: dict[str, CwpState] = {}
         self.enum_values = StringManager()
         self.active_checks = StringManager()
         self.valid_moves = StringManager()
+        self.errors: list[Error] = []
 
-    @staticmethod
-    def _active_condition(state: CwpState) -> str:
-        incoming = " && ".join(_edge_expr(e) for e in state.in_edges) or "1"
-        outgoing = " || ".join(_edge_expr(e) for e in state.out_edges) or "0"
+    def _active_condition(self, state: CwpState) -> str:
+        incoming = (
+            " && ".join(_edge_expr(e, self.errors) for e in state.in_edges) or "1"
+        )
+        outgoing = (
+            " || ".join(_edge_expr(e, self.errors) for e in state.out_edges) or "0"
+        )
         return f"({incoming}) && !({outgoing})"
 
     def visit_state(self, state: CwpState) -> bool:
@@ -123,5 +138,16 @@ class CwpCbmcVisitor(CwpVisitor):
         out.write_str(END_STR, NL_DOUBLE)
         return out
 
+    def get_result(self) -> Result[str, Error]:
+        """The generated C, or the first edge condition C cannot express."""
+        if self.errors:
+            return Failure(self.errors[0])
+        return Success(str(self._build()))
+
     def __repr__(self) -> str:
-        return str(self._build())
+        out = self._build()
+        for error in self.errors:
+            if isinstance(error, FeelCbmcUnsupportedError):
+                msg = f"{error.construct} at {error.line}:{error.column}"
+                out.write_str(f'#error "unsupported in a CWP edge: {msg}"', NL_SINGLE)
+        return str(out)

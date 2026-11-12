@@ -16,7 +16,11 @@ from bpmncwpverify.core.bpmn import (
     StartEvent,
     Task,
 )
-from bpmncwpverify.core.error import BpmnCbmcUnsupportedElementError
+from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedElementError,
+    FeelCbmcUnsupportedError,
+)
+from bpmncwpverify.core.feel import parse
 from bpmncwpverify.visitors.bpmn_cbmc_visitor import (
     HELPER_DEFS_STR,
     CbmcBpmnGenVisitor,
@@ -30,6 +34,7 @@ def connect(src: Node, dst: Node, fid: str, expr: str = "") -> SequenceFlow:
     flow.source_node = src
     flow.target_node = dst
     flow.expression = expr
+    flow.expression_tree = parse(expr).unwrap() if expr else None
     src.add_out_flow(flow)
     dst.add_in_flow(flow)
     return flow
@@ -52,8 +57,10 @@ def end(i: str = "e") -> EndEvent:
     return EndEvent(i, i, "", "")
 
 
-def task(i: str = "t") -> Task:
-    return Task(i, i, "")
+def task(i: str = "t", behavior: str = "") -> Task:
+    t = Task(i, i, behavior)
+    t.behavior_tree = parse(behavior).unwrap() if behavior else None
+    return t
 
 
 def run(*processes: tuple[str, list[Node]]) -> CbmcBpmnGenVisitor:
@@ -139,8 +146,8 @@ def test_exclusive_gateway_has_one_transition_per_out_flow():
     v = gateway_visitor()
     by_label = {t.label: t for t in v.transitions}
     ta, tb = by_label["g -> fa"], by_label["g -> fb"]
-    assert ta.enable == "(tok_f1) && (x > 5)"
-    assert tb.enable == "(tok_f1) && (x <= 5)"
+    assert ta.enable == "(tok_f1) && ((x > 5))"
+    assert tb.enable == "(tok_f1) && ((x <= 5))"
     assert ta.body == ["tok_f1 = false;", "bpmn_occupied = tok_fa;", "tok_fa = true;"]
     assert tb.body[-1] == "tok_fb = true;"
 
@@ -148,7 +155,7 @@ def test_exclusive_gateway_has_one_transition_per_out_flow():
 def test_exclusive_gateway_without_viable_path_is_a_violation():
     v = gateway_visitor()
     stuck = next(t for t in v.transitions if "no viable path" in t.label)
-    assert stuck.enable == "(tok_f1) && !(x > 5) && !(x <= 5)"
+    assert stuck.enable == "(tok_f1) && !((x > 5)) && !((x <= 5))"
     assert stuck.body[0].startswith("__CPROVER_assert(false")
 
 
@@ -370,7 +377,7 @@ def test_parallel_gateway_with_message_flow_is_an_error():
 
 
 def behavior_body(code: str) -> list[str]:
-    s, t, e = start(), Task("t", "t", code), end()
+    s, t, e = start(), task("t", code), end()
     connect(s, t, "f1")
     connect(t, e, "f2")
     return by_label(run(("p", [s, t, e])), "t").body
@@ -380,51 +387,48 @@ def test_empty_behavior_does_not_update_the_cwp():
     assert not any("cwp_update" in line for line in behavior_body(""))
 
 
-def test_assignments_are_followed_by_cwp_update():
-    body = behavior_body("a = b\nc = 1; d = a + 2\nskip")
-    assert body[1:5] == ["a = b;", "c = 1;", "d = a + 2;", "cwp_update();"]
+def test_triples_are_followed_by_cwp_update():
+    body = behavior_body("((a, [b], b), (c, [], 1), (d, [a], a + 2))")
+    assert body[1:10] == [
+        "{",
+        "  a = b;",
+        "}",
+        "{",
+        "  c = 1;",
+        "}",
+        "{",
+        "  d = (a + 2);",
+        "}",
+    ]
+    assert body[10] == "cwp_update();"
     # the CWP update comes before the tokens move on
     assert body.index("cwp_update();") < body.index("tok_f2 = true;")
 
 
-def test_skip_behavior_still_updates_the_cwp():
-    assert behavior_body("skip")[1] == "cwp_update();"
+def test_choose_behavior_is_a_nondeterministic_choice():
+    body = "\n".join(behavior_body("(t, [], choose [agreed, failed])"))
+    assert "unsigned int feel_choice_0 = nondet_uint();" in body
+    assert "__CPROVER_assume(feel_choice_0 < 2u);" in body
+    assert "t = (feel_choice_0 == 0u ? agreed : failed);" in body
+    assert body.index("t = ") < body.index("cwp_update();")
 
 
-def test_if_behavior_is_a_nondeterministic_choice():
-    body = "\n".join(
-        behavior_body("if\n:: true -> t = agreed\n:: x == 1 -> t = failed; u = 2\nfi")
-    )
-    assert "__CPROVER_assume(bpmn_alt_0 < 2u);" in body
-    assert "__CPROVER_assume(true);" in body
-    assert "__CPROVER_assume(x == 1);" in body
-    assert "t = failed;" in body and "u = 2;" in body
-    assert body.index("t = failed;") < body.index("cwp_update();")
-
-
-def test_else_option_negates_the_other_guards():
-    body = "\n".join(
-        behavior_body("if\n:: x > 1 -> t = 1\n:: x < 0 -> t = 2\n:: else -> t = 3\nfi")
-    )
-    assert "__CPROVER_assume(!(x > 1) && !(x < 0));" in body
-
-
-def test_nested_if_behavior():
-    body = "\n".join(
-        behavior_body("if\n:: true ->\nif\n:: true -> a = 1\nfi\nb = 2\nfi")
-    )
-    assert "bpmn_alt_0" in body and "bpmn_alt_1" in body
-    assert body.index("a = 1;") < body.index("b = 2;")
-
-
-@pytest.mark.parametrize("code", ["do\n:: true -> a = 1\nod", "foo(1)", "if\nfi"])
-def test_unsupported_behavior_is_an_error(code):
-    s, t, e = start(), Task("t", "t", code), end()
+def test_unsupported_behavior_is_an_error():
+    s, t, e = start(), task("t", "(x, [], 1.5)"), end()
     connect(s, t, "f1")
     connect(t, e, "f2")
     result = run(("p", [s, t, e])).get_result()
     assert isinstance(result, Failure)
-    assert result.failure().element_id == "t"
+    assert isinstance(result.failure(), FeelCbmcUnsupportedError)
+
+
+def test_unsupported_condition_is_an_error():
+    s, g, e = start(), ExclusiveGatewayNode("g", "g"), end()
+    connect(s, g, "f1")
+    connect(g, e, "f2", "x ** 9 > 1")
+    result = run(("p", [s, g, e])).get_result()
+    assert isinstance(result, Failure)
+    assert isinstance(result.failure(), FeelCbmcUnsupportedError)
 
 
 def cbmc(tmp_path, v, decls, init, extra="", bound=8):
@@ -474,8 +478,8 @@ def test_cbmc_loop_back_into_fork_does_not_deadlock(tmp_path):
 
 
 def test_cbmc_behavior_updates_state_and_cwp(tmp_path):
-    code = "if\n:: true -> a = 1\n:: true -> a = 2\nfi\nb = a + 1"
-    s, t, e = start(), Task("t", "t", code), end()
+    code = "((a, [], choose [1, 2]), (b, [a], a + 1))"
+    s, t, e = start(), task("t", code), end()
     connect(s, t, "f1")
     connect(t, e, "f2")
     v = run(("p", [s, t, e]))
@@ -487,13 +491,11 @@ def test_cbmc_behavior_updates_state_and_cwp(tmp_path):
     assert "VERIFICATION SUCCESSFUL" in out, out[-1500:]
 
 
-def test_cbmc_behavior_guard_blocks_when_false(tmp_path):
-    code = "if\n:: a == 1 -> b = 5\nfi"
-    s, t, e = start(), Task("t", "t", code), end()
+def test_cbmc_choose_tries_every_option(tmp_path):
+    s, t, e = start(), task("t", "(a, [], choose [1, 2, 3])"), end()
     connect(s, t, "f1")
     connect(t, e, "f2")
     v = run(("p", [s, t, e]))
-    # the guard is false, so the task can never run and the process never ends
-    extra = '  __CPROVER_assert(!ended_p, "blocked");\n'
-    out = cbmc(tmp_path, v, "int a = 0; int b = 0;", "", extra, bound=5)
-    assert "VERIFICATION SUCCESSFUL" in out, out[-1500:]
+    extra = '  __CPROVER_assert(a != 3, "never 3");\n'
+    out = cbmc(tmp_path, v, "int a = 0;", "", extra, bound=5)
+    assert "VERIFICATION FAILED" in out, out[-1500:]
