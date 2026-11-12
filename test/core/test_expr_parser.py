@@ -227,13 +227,6 @@ def test_or_input_test(or_input):
         "a < b && c > d",
         "a + b == c - d",
         "(a < b) && (c >= d)",
-        "a[0] == b[1]",
-        "a[0] < b[1]",
-        "a[0] <= b[1]",
-        "a[0] > b[1]",
-        "a[0] >= b[1]",
-        "a[0] != b[1]",
-        "a[0] + b[1] == b[1] + a[0]",
         # Complex Nested Expressions
         "a * (b + c) / d",
         "a + b * (c - d) / e",

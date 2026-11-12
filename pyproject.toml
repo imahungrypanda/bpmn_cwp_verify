@@ -60,4 +60,3 @@ disallow_subclassing_any = true
 
 [tool.pytest.ini_options]
 addopts = "--cov=./src/bpmncwpverify/ --cov-report=html --cov-report=term"
-pythonpath = ["."]

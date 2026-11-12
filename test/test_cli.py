@@ -28,8 +28,8 @@ def test_givin_bad_state_file_path_when_verify_then_io_error(capsys):
     test_args = [
         "verify",
         "state.txt",
-        "./test/resources/simple_example/test_cwp.xml",
-        "./test/resources/simple_example/test_bpmn.bpmn",
+        "./test/resources/feel/simple_example/test_cwp.xml",
+        "./test/resources/feel/simple_example/test_bpmn.bpmn",
     ]
     sys.argv = test_args
 
@@ -46,9 +46,9 @@ def test_givin_bad_cwp_file_path_when_verify_then_io_error(capsys):
     # given
     test_args = [
         "verify",
-        "./test/resources/simple_example/state.txt",
+        "./test/resources/feel/simple_example/state.txt",
         "test_cwp.xml",
-        "./test/resources/simple_example/test_bpmn.bpmn",
+        "./test/resources/feel/simple_example/test_bpmn.bpmn",
     ]
     sys.argv = test_args
 
@@ -65,8 +65,8 @@ def test_givin_bad_bpmn_file_path_when_verify_then_io_error(capsys):
     # given
     test_args = [
         "verify",
-        "./test/resources/simple_example/state.txt",
-        "./test/resources/simple_example/test_cwp.xml",
+        "./test/resources/feel/simple_example/state.txt",
+        "./test/resources/feel/simple_example/test_cwp.xml",
         "test_bpmn.bpmn",
     ]
     sys.argv = test_args
@@ -84,9 +84,9 @@ def test_givin_bad_state_file_when_verify_then_state_errror(capsys):
     # given
     test_args = [
         "verify",
-        "./test/resources/simple_example/bad_state.txt",
-        "./test/resources/simple_example/test_cwp.xml",
-        "./test/resources/simple_example/test_bpmn.bpmn",
+        "./test/resources/feel/simple_example/bad_state.txt",
+        "./test/resources/feel/simple_example/test_cwp.xml",
+        "./test/resources/feel/simple_example/test_bpmn.bpmn",
     ]
     sys.argv = test_args
 
@@ -104,9 +104,9 @@ def test_givin_bad_files_when_verify_then_faliure(capsys):
     # given
     test_args = [
         "verify",
-        "./test/resources/simple_example/state.txt",
-        "./test/resources/simple_example/test_cwp.xml",
-        "./test/resources/simple_example/test_bpmn.bpmn",
+        "./test/resources/feel/simple_example/state.txt",
+        "./test/resources/feel/simple_example/test_cwp.xml",
+        "./test/resources/feel/simple_example/test_bpmn.bpmn",
     ]
     sys.argv = test_args
 
@@ -124,9 +124,9 @@ def test_givin_good_files_when_verify_then_success(capsys):
     # given
     test_args = [
         "verify",
-        "./test/resources/face2face/feel/state.txt",
-        "./test/resources/face2face/feel/cwp.xml",
-        "./test/resources/face2face/feel/workflow.bpmn",
+        "./test/resources/feel/face2face/state.txt",
+        "./test/resources/feel/face2face/cwp.xml",
+        "./test/resources/feel/face2face/workflow.bpmn",
     ]
     sys.argv = test_args
 
@@ -144,17 +144,17 @@ def test_givin_good_files_when_verify_then_success(capsys):
 def test_given_bad_input_when_webverify_then_faliure():
     # given
     bpmn = ""
-    with open("./test/resources/simple_example/test_bpmn.bpmn") as bpmn_file:
+    with open("./test/resources/feel/simple_example/test_bpmn.bpmn") as bpmn_file:
         for line in bpmn_file:
             bpmn += line
 
     cwp = ""
-    with open("./test/resources/simple_example/test_cwp.xml") as cwp_file:
+    with open("./test/resources/feel/simple_example/test_cwp.xml") as cwp_file:
         for line in cwp_file:
             cwp += line
 
     state = ""
-    with open("./test/resources/simple_example/state.txt") as state_file:
+    with open("./test/resources/feel/simple_example/state.txt") as state_file:
         for line in state_file:
             state += line
 
@@ -171,17 +171,17 @@ def test_given_bad_input_when_webverify_then_faliure():
 def test_given_good_input_when_webverify_then_success():
     # given
     bpmn = ""
-    with open("./test/resources/face2face/feel/workflow.bpmn") as bpmn_file:
+    with open("./test/resources/feel/face2face/workflow.bpmn") as bpmn_file:
         for line in bpmn_file:
             bpmn += line
 
     cwp = ""
-    with open("./test/resources/face2face/feel/cwp.xml") as cwp_file:
+    with open("./test/resources/feel/face2face/cwp.xml") as cwp_file:
         for line in cwp_file:
             cwp += line
 
     state = ""
-    with open("./test/resources/face2face/feel/state.txt") as state_file:
+    with open("./test/resources/feel/face2face/state.txt") as state_file:
         for line in state_file:
             state += line
 
@@ -195,17 +195,17 @@ def test_given_good_input_when_webverify_then_success():
 def test_given_bad_input_when_webverify_then_failure():
     # given
     bpmn = ""
-    with open("./test/resources/simple_example/test_bpmn.bpmn") as bpmn_file:
+    with open("./test/resources/feel/simple_example/test_bpmn.bpmn") as bpmn_file:
         for line in bpmn_file:
             bpmn += line
 
     cwp = ""
-    with open("./test/resources/simple_example/test_cwp.xml") as cwp_file:
+    with open("./test/resources/feel/simple_example/test_cwp.xml") as cwp_file:
         for line in cwp_file:
             cwp += line
 
     state = ""
-    with open("./test/resources/simple_example/bad_state.txt") as state_file:
+    with open("./test/resources/feel/simple_example/bad_state.txt") as state_file:
         for line in state_file:
             state += line
     # when
@@ -222,7 +222,7 @@ def test_triggers_lambda_when_given_cloud_flag(mocker):
         "bpmncwpverify.cli._trigger_lambda",
         return_value=IOSuccess(
             json.load(
-                open("./test/resources/simple_example/lambda_output.json"),
+                open("./test/resources/feel/simple_example/lambda_output.json"),
                 object_hook=lambda obj: SpinVerificationReport(**obj),
             )
         ),
@@ -230,9 +230,9 @@ def test_triggers_lambda_when_given_cloud_flag(mocker):
     test_args = [
         "verify",
         "--cloud",
-        "./test/resources/simple_example/state.txt",
-        "./test/resources/simple_example/test_cwp.xml",
-        "./test/resources/simple_example/test_bpmn.bpmn",
+        "./test/resources/feel/simple_example/state.txt",
+        "./test/resources/feel/simple_example/test_cwp.xml",
+        "./test/resources/feel/simple_example/test_bpmn.bpmn",
     ]
     sys.argv = test_args
     verify()
@@ -244,24 +244,24 @@ def test_assert_success_when_lambda_returns_success(mocker):
     mock_response = SimpleNamespace()
     mock_response.raise_for_status = lambda: None
     mock_response.json = lambda **kwargs: json.load(
-        open("./test/resources/simple_example/lambda_output.json"),
+        open("./test/resources/feel/simple_example/lambda_output.json"),
         object_hook=lambda obj: SpinVerificationReport(**obj),
     )
 
     mocker.patch("requests.post", return_value=mock_response)
 
     bpmn = ""
-    with open("./test/resources/simple_example/test_bpmn.bpmn") as bpmn_file:
+    with open("./test/resources/feel/simple_example/test_bpmn.bpmn") as bpmn_file:
         for line in bpmn_file:
             bpmn += line
 
     cwp = ""
-    with open("./test/resources/simple_example/test_cwp.xml") as cwp_file:
+    with open("./test/resources/feel/simple_example/test_cwp.xml") as cwp_file:
         for line in cwp_file:
             cwp += line
 
     state = ""
-    with open("./test/resources/simple_example/state.txt") as state_file:
+    with open("./test/resources/feel/simple_example/state.txt") as state_file:
         for line in state_file:
             state += line
 
@@ -283,17 +283,17 @@ def test_assert_failure_when_lambda_verification_fails(mocker):
     mocker.patch("requests.post", return_value=mock_response)
 
     bpmn = ""
-    with open("./test/resources/simple_example/test_bpmn.bpmn") as bpmn_file:
+    with open("./test/resources/feel/simple_example/test_bpmn.bpmn") as bpmn_file:
         for line in bpmn_file:
             bpmn += line
 
     cwp = ""
-    with open("./test/resources/simple_example/test_cwp.xml") as cwp_file:
+    with open("./test/resources/feel/simple_example/test_cwp.xml") as cwp_file:
         for line in cwp_file:
             cwp += line
 
     state = ""
-    with open("./test/resources/simple_example/state.txt") as state_file:
+    with open("./test/resources/feel/simple_example/state.txt") as state_file:
         for line in state_file:
             state += line
 
@@ -318,17 +318,17 @@ def test_assert_failure_when_lambda_returns_internal_server_error(mocker):
     mocker.patch("requests.post", return_value=mock_response)
 
     bpmn = ""
-    with open("./test/resources/simple_example/test_bpmn.bpmn") as bpmn_file:
+    with open("./test/resources/feel/simple_example/test_bpmn.bpmn") as bpmn_file:
         for line in bpmn_file:
             bpmn += line
 
     cwp = ""
-    with open("./test/resources/simple_example/test_cwp.xml") as cwp_file:
+    with open("./test/resources/feel/simple_example/test_cwp.xml") as cwp_file:
         for line in cwp_file:
             cwp += line
 
     state = ""
-    with open("./test/resources/simple_example/state.txt") as state_file:
+    with open("./test/resources/feel/simple_example/state.txt") as state_file:
         for line in state_file:
             state += line
 

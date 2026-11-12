@@ -1,16 +1,20 @@
 from bpmncwpverify.core.cwp import Cwp, CwpEdge, CwpState, CwpVisitor
-from bpmncwpverify.core.feel import Feel
 from bpmncwpverify.util.stringmanager import (
     NL_DOUBLE,
     NL_SINGLE,
     IndentAction,
     StringManager,
 )
-from bpmncwpverify.visitors.feel_to_promela_visitor import FeelToPromelaVisitor
+from bpmncwpverify.visitors.feel_to_promela_visitor import condition_to_promela
 
 START_STR = "//**********CWP VARIABLE DECLARATION************//"
 END_STR = "//**********************************************//"
 PRIME_SUFFIX = "_prime"
+
+
+def _condition(edge: CwpEdge) -> str:
+    assert edge.expression_tree is not None, f"edge {edge.id} has no FEEL condition"
+    return condition_to_promela(edge.expression_tree)
 
 
 class CwpPromelaVisitor(CwpVisitor):
@@ -20,7 +24,6 @@ class CwpPromelaVisitor(CwpVisitor):
         "caculate_state_inline",
         "prime_vars",
         "vars",
-        "chooses",
         "proper_path_block",
         "var_reassignment",
         "list_of_cwp_states",
@@ -32,7 +35,6 @@ class CwpPromelaVisitor(CwpVisitor):
         self.caculate_state_inline = StringManager()
         self.prime_vars = StringManager()
         self.vars = StringManager()
-        self.chooses = StringManager()
         self.proper_path_block = StringManager()
         self.var_reassignment = StringManager()
         self.list_of_cwp_states: list[str] = []
@@ -41,33 +43,22 @@ class CwpPromelaVisitor(CwpVisitor):
         guard = StringManager()
 
         guard.write_str("(")
-
-        edges: list[str] = []
-        for edge in state.in_edges:
-            source_changer = FeelToPromelaVisitor(edge.id)
-            if isinstance(edge.expression, Feel):
-                edge.expression.ast.accept(source_changer)
-                edges.append(str(source_changer.promela))
-                self.chooses.write_str(source_changer.choose)
-            else:
-                edges.append(str(edge.expression))
         guard.write_str(
-            " && ".join(edges if state.in_edges else ["true"])
+            " && ".join(
+                [_condition(edge) for edge in state.in_edges]
+                if state.in_edges
+                else ["true"]
+            )
         )  # ["true"] in case no in edges
 
         guard.write_str(") && !(")
 
-        edges = []
-        for edge in state.out_edges:
-            source_changer = FeelToPromelaVisitor(edge.id)
-            if isinstance(edge.expression, Feel):
-                edge.expression.ast.accept(source_changer)
-                edges.append(str(source_changer.promela))
-                self.chooses.write_str(source_changer.choose)
-            else:
-                edges.append(str(edge.expression))
         guard.write_str(
-            " || ".join(edges if state.out_edges else ["false"])
+            " || ".join(
+                [_condition(edge) for edge in state.out_edges]
+                if state.out_edges
+                else ["false"]
+            )
         )  # ["false"] in case no out edges
 
         guard.write_str(")")
@@ -118,15 +109,11 @@ class CwpPromelaVisitor(CwpVisitor):
 
         nWayXor.write_str("if", NL_SINGLE, IndentAction.INC)
 
-        nWayXor.write_str(":: (sumOfActiveStates != 1) ->", NL_SINGLE, IndentAction.INC)
-        nWayXor.write_str("DBG(stateLogger())", NL_SINGLE)
         nWayXor.write_str(
-            'DBG(printf("Assert: In more that one or no state"))', NL_SINGLE
+            ':: (sumOfActiveStates != 1) -> {printf("Assert: In more that one or no state"); assert false}',
+            NL_SINGLE,
         )
-
-        nWayXor.write_str("assert(false)", NL_SINGLE)
-
-        nWayXor.write_str(":: else -> skip", NL_SINGLE, IndentAction.DEC)
+        nWayXor.write_str(":: else -> skip", NL_SINGLE)
 
         nWayXor.write_str("fi", NL_SINGLE, IndentAction.DEC)
 
@@ -162,34 +149,33 @@ class CwpPromelaVisitor(CwpVisitor):
         new_str = "inline updateState() {"
         self.update_state_inline.write_str(new_str, NL_SINGLE, IndentAction.INC)
 
-        self.update_state_inline.write_str(self.prime_vars, indent_offset=1)
+        self.update_state_inline.write_str(self.prime_vars)
 
         self.update_state_inline.write_str("if", NL_SINGLE, IndentAction.INC)
 
-        self.update_state_inline.write_str(self.proper_path_block, indent_offset=1)
+        self.update_state_inline.write_str(self.proper_path_block)
 
-        self.update_state_inline.write_str(":: else ->", NL_SINGLE, IndentAction.INC)
         self.update_state_inline.write_str(
-            'DBG(printf("Assert: Not a valid CWP transition"))', NL_SINGLE
+            ':: else -> printf("Assert: Not a valid CWP transition"); assert false',
+            NL_SINGLE,
         )
-        self.update_state_inline.write_str("assert(false)", NL_SINGLE)
 
-        self.update_state_inline.write_str("fi", NL_SINGLE, IndentAction.DECTWO)
+        self.update_state_inline.write_str("fi", NL_SINGLE, IndentAction.DEC)
 
-        self.update_state_inline.write_str(self.var_reassignment, indent_offset=1)
+        self.update_state_inline.write_str(self.var_reassignment)
 
-        self.update_state_inline.write_str(self.build_XOR_block(), indent_offset=1)
+        self.update_state_inline.write_str(self.build_XOR_block())
 
-        self.update_state_inline.write_str("}", NL_DOUBLE, IndentAction.DEC)
+        self.update_state_inline.write_str("}", NL_SINGLE, IndentAction.DEC)
 
     def create_caculate_state_inline(self) -> None:
         self.caculate_state_inline.write_str(
             "inline caculateState() {", NL_SINGLE, IndentAction.INC
         )
 
-        self.caculate_state_inline.write_str(self.vars, indent_offset=1)
+        self.caculate_state_inline.write_str(self.vars)
 
-        self.caculate_state_inline.write_str("}", NL_DOUBLE, IndentAction.DEC)
+        self.caculate_state_inline.write_str("}", NL_SINGLE, IndentAction.DEC)
 
     def end_visit_edge(self, edge: CwpEdge) -> None:
         pass
@@ -204,4 +190,6 @@ class CwpPromelaVisitor(CwpVisitor):
         self.create_caculate_state_inline()
 
     def __repr__(self) -> str:
-        return f"{self.cwp_states}{self.chooses}{self.update_state_inline}{self.caculate_state_inline}"
+        return (
+            f"{self.cwp_states}{self.update_state_inline}{self.caculate_state_inline}"
+        )

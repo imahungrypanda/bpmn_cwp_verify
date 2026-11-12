@@ -9,12 +9,11 @@
     "**/.venv",
     "**/.mypy_cache",
     "**/build",
-    "**/dist",
-    "**/node_modules",
-    "**/.*"
+    "**/dist"
   ],
   "reportUnknownArgumentType": false,
   "extraPaths": [
-    "src"
+    "src",
+    "/var/lang/lib/python3.12/site-packages/"
   ]
 }

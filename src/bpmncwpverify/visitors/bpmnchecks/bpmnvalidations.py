@@ -7,7 +7,6 @@ from bpmncwpverify.core.bpmn import (
     BpmnVisitor,
     EndEvent,
     Event,
-    EventBasedGatewayNode,
     ExclusiveGatewayNode,
     Flow,
     GatewayNode,
@@ -63,10 +62,6 @@ class ProcessConnectivityVisitor(BpmnVisitor):
 
     def visit_boundary_event(self, boundary_event: Task.BoundaryEvent) -> bool:
         self.visited.add(boundary_event)
-        return True
-
-    def visit_event_based_gateway(self, gateway: EventBasedGatewayNode) -> bool:
-        self.visited.add(gateway)
         return True
 
     def visit_exclusive_gateway(self, gateway: ExclusiveGatewayNode) -> bool:
@@ -132,9 +127,6 @@ class ValidateMsgsVisitor(BpmnVisitor):
             raise Exception(BpmnMsgGatewayError(gateway_type, gateway.id))
         return True
 
-    def visit_event_based_gateway(self, gateway: EventBasedGatewayNode) -> bool:
-        return self._validate_gateway_no_msgs(gateway, "EventBasedGatewayNone")
-
     def visit_parallel_gateway(self, gateway: ParallelGatewayNode) -> bool:
         return self._validate_gateway_no_msgs(gateway, "ParallelGatewayNode")
 
@@ -162,9 +154,6 @@ class ValidateBpmnIncomingFlows(BpmnVisitor):
     def visit_task(self, task: Task) -> bool:
         return self._check_in_flows(task)
 
-    def visit_event_based_gateway(self, gateway: EventBasedGatewayNode) -> bool:
-        return self._check_in_flows(gateway)
-
     def visit_exclusive_gateway(self, gateway: ExclusiveGatewayNode) -> bool:
         return self._check_in_flows(gateway)
 
@@ -186,9 +175,6 @@ class ValidateBpmnOutgoingFlows(BpmnVisitor):
 
     def visit_task(self, task: Task) -> bool:
         return self._check_out_flows(task)
-
-    def visit_event_based_gateway(self, gateway: EventBasedGatewayNode) -> bool:
-        return self._check_out_flows(gateway)
 
     def visit_exclusive_gateway(self, gateway: ExclusiveGatewayNode) -> bool:
         return self._check_out_flows(gateway)
@@ -230,10 +216,6 @@ class SetFlowLeafs(BpmnVisitor):
         self.visited.add(task)
         return True
 
-    def visit_event_based_gateway(self, gateway: EventBasedGatewayNode) -> bool:
-        self.visited.add(gateway)
-        return True
-
     def visit_exclusive_gateway(self, gateway: ExclusiveGatewayNode) -> bool:
         self.visited.add(gateway)
         return True
@@ -264,11 +246,6 @@ class ValidateIdVisitor(BpmnVisitor):
     def visit_process(self, process: Process) -> bool:
         if not self._is_id_valid(process):
             raise Exception(BpmnInvalidIdError(process.id))
-        return True
-
-    def visit_event_based_gateway(self, gateway: EventBasedGatewayNode) -> bool:
-        if not self._is_id_valid(gateway):
-            raise Exception(BpmnInvalidIdError(gateway.id))
         return True
 
     def visit_exclusive_gateway(self, gateway: ExclusiveGatewayNode) -> bool:

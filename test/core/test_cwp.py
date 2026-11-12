@@ -1,4 +1,6 @@
 # type: ignore
+from pathlib import Path
+from xml.etree import ElementTree
 from xml.etree.ElementTree import Element, SubElement
 
 import pytest
@@ -12,7 +14,12 @@ from bpmncwpverify.core.error import (
     CwpNoEndStatesError,
     CwpNoStartStateError,
     Error,
+    FeelConditionTypeError,
+    FeelOperatorTypeError,
+    FeelSyntaxError,
+    FeelUnsupportedError,
 )
+from bpmncwpverify.core.feel_tree import BinaryOp, Name, Number
 from bpmncwpverify.core.state import State
 
 
@@ -144,38 +151,50 @@ def test_invalid_cwp_no_end_state():
     "input, expected",
     [
         (
-            "&lt;div&gt;paymentOwner = buyerName and backpackOwner = sellerName&lt;/div&gt;",
-            "paymentOwner = buyerName and backpackOwner = sellerName",
+            "&lt;div&gt;paymentOwner == buyerName &amp;amp;&amp;amp;&lt;/div&gt;&lt;div&gt;backpackOwner == sellerName&lt;br&gt;&lt;/div&gt;",
+            "paymentOwner == buyerName && backpackOwner == sellerName",
         ),
         (
-            "terms=noRetry or paymentOffered = noRetryPayment",
-            "terms = noRetry or paymentOffered = noRetryPayment",
+            "terms==noRetry ||paymentOffered == noRetryPayment",
+            "terms == noRetry || paymentOffered == noRetryPayment",
         ),
         (
-            "terms = agreed  and &lt;br&gt;paymentOffered = paymentAmount",
-            "terms = agreed and paymentOffered = paymentAmount",
+            "terms == agreed &amp;amp;&amp;amp;&lt;br&gt;paymentOffered == paymentAmount",
+            "terms == agreed && paymentOffered == paymentAmount",
         ),
         (
-            "terms != pending or &lt;br&gt;paymentOffered != pendingPayment",
-            "terms != pending or paymentOffered != pendingPayment",
+            "terms != pending ||&lt;br&gt;paymentOffered != pendingPayment",
+            "terms != pending || paymentOffered != pendingPayment",
         ),
         ("x &amp;gt; 5", "x > 5"),
         ("x &amp;lt;= 5", "x <= 5"),
         (
-            "(search = on and blackBox = missing and risk = assessing&amp;nbsp;&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212)); color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;and uuvComms = wait and conditions = changed)&lt;/span&gt;",
-            "(search = on and blackBox = missing and risk = assessing and uuvComms = wait and conditions = changed)",
+            "(search == on &amp;amp;&amp;amp; blackBox == missing &amp;amp;&amp;amp; risk == assessing&amp;nbsp;&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212)); color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;&amp;amp;&amp;amp; uuvComms == wait &amp;amp;&amp;amp; conditions == changed)&lt;/span&gt;",
+            "(search == on && blackBox == missing && risk == assessing && uuvComms == wait && conditions == changed)",
         ),
         (
-            "&lt;div&gt;paymentOwner = buyerName and &lt;span style=&quot;color:red;&quot;&gt;status = paid&lt;/span&gt; and backpackOwner = sellerName &lt;span style=&quot;background:yellow;&quot;&gt;and shipped = true&lt;/span&gt;&lt;/div&gt;",
-            "paymentOwner = buyerName and status = paid and backpackOwner = sellerName and shipped = true",
+            "&lt;div&gt;paymentOwner == buyerName &amp;amp;&amp;amp; &lt;span style=&quot;color:red;&quot;&gt;status == paid&lt;/span&gt; &amp;amp;&amp;amp; backpackOwner == sellerName &lt;span style=&quot;background:yellow;&quot;&gt;&amp;amp;&amp;amp; shipped == true&lt;/span&gt;&lt;/div&gt;",
+            "paymentOwner == buyerName && status == paid && backpackOwner == sellerName && shipped == true",
         ),
         (
-            "terms !=NoRetry or bucketsOfMoney or not(suspicousSeller)",
-            "terms != NoRetry or bucketsOfMoney or not(suspicousSeller)",
+            "&lt;div&gt;user == loggedIn &amp;amp;&amp;amp; &lt;span style=&quot;color:blue;&quot;&gt;status == active &lt;span style=&quot;color:red;&quot;&gt;HIGHPRIORITY&lt;/span&gt;&lt;/span&gt; &amp;amp;&amp;amp; role == admin&lt;/div&gt;",
+            "user == loggedIn && status == active && HIGHPRIORITY && role == admin",
         ),
         (
-            "user = loggedIn and status = active and ALERT and HIGHPRIORITY and role = admin",
-            "user = loggedIn and status = active and ALERT and HIGHPRIORITY and role = admin",
+            "terms !=NoRetry || bucketsOfMoney|| !suspicousSeller",
+            "terms != NoRetry || bucketsOfMoney || !suspicousSeller",
+        ),
+        (
+            "bucketsOfMoney &&!suspicousSeller",
+            "bucketsOfMoney && !suspicousSeller",
+        ),
+        (
+            "&lt;div&gt;(user==loggedIn)&amp;amp;&amp;amp;&nbsp;&lt;span style=&quot;color:blue;&quot;&gt;status==active&lt;br&gt;&lt;span style=&quot;color:red;&quot;&gt;!HIGHPRIORITY&lt;/span&gt;&lt;/span&gt;&amp;amp;&amp;amp;role==admin&lt;/div&gt;",
+            "(user == loggedIn) && status == active && !HIGHPRIORITY && role == admin",
+        ),
+        (
+            "&lt;div&gt;user == loggedIn &amp;amp;&amp;amp; &lt;span style=&quot;color:blue;&quot;&gt;status == active &lt;span style=&quot;color:green;&quot;&gt;ALERT &lt;span style=&quot;color:red;&quot;&gt;HIGHPRIORITY&lt;/span&gt;&lt;/span&gt;&lt;/span&gt; &amp;amp;&amp;amp; role == admin&lt;/div&gt;",
+            "user == loggedIn && status == active && ALERT && HIGHPRIORITY && role == admin",
         ),
     ],
 )
@@ -202,3 +221,104 @@ def test_cwp_edge_from_xml_with_no_id(mocker):
         CwpEdge.from_xml(mock_element, "test")
 
     assert exc_info.value.args[0] == "No ID for edge or no targetRef"
+
+
+FEEL_RESOURCES = Path(__file__).parent.parent / "resources" / "feel"
+
+DOOR_STATE = """
+enum Door {open closed}
+enum Light {on off}
+
+var door: Door = closed
+var light: Light = off
+var count: byte = 0
+"""
+
+
+def build_door_cwp_root(label):
+    root, mx_root = get_root_mx_root()
+    add_mx_cell(mx_root, id="s1", value="Start", style="rounded=1;state", vertex="1")
+    add_mx_cell(mx_root, id="s2", value="End", style="rounded=1;state", vertex="1")
+    add_mx_cell(mx_root, id="e1", source="s1", target="s2", style="edge", edge="1")
+    add_mx_cell(
+        mx_root, id="expr1", value=label, style="edgeLabel", parent="e1", vertex="1"
+    )
+    return root
+
+
+def test_cwp_edge_condition_is_stored_as_feel_tree():
+    state = build_state(DOOR_STATE)
+    root = build_door_cwp_root("light = on or count = 3")
+
+    cwp = setup_cwp_and_assert(root, state)
+
+    assert cwp.edges["e1"].expression == "light = on or count = 3"
+    assert cwp.edges["e1"].expression_tree == BinaryOp(
+        "or",
+        BinaryOp("=", Name("light"), Name("on")),
+        BinaryOp("=", Name("count"), Number(3)),
+    )
+    assert cwp.edges["Init_Edge"].expression_tree == BinaryOp(
+        "and",
+        BinaryOp(
+            "and",
+            BinaryOp("=", Name("door"), Name("closed")),
+            BinaryOp("=", Name("light"), Name("off")),
+        ),
+        BinaryOp("=", Name("count"), Number(0)),
+    )
+
+
+def test_cwp_edge_condition_html_is_stripped_before_parsing():
+    state = build_state(DOOR_STATE)
+    root = build_door_cwp_root(
+        "&lt;div&gt;door = open and&lt;/div&gt;&lt;div&gt;count &amp;lt; 3&lt;br&gt;&lt;/div&gt;"
+    )
+
+    cwp = setup_cwp_and_assert(root, state)
+
+    assert cwp.edges["e1"].expression == "door = open and count < 3"
+    assert cwp.edges["e1"].expression_tree is not None
+
+
+@pytest.mark.parametrize(
+    "label, error",
+    [
+        ("light == on", FeelSyntaxError),
+        ("light = on &amp;&amp; count = 3", FeelSyntaxError),
+        ("count + 1", FeelConditionTypeError),
+        ("light = open", FeelOperatorTypeError),
+        ("some x in [1] satisfies x > 0", FeelUnsupportedError),
+    ],
+)
+def test_cwp_edge_condition_not_in_feel_fails_with_feel_error(label, error):
+    state = build_state(DOOR_STATE)
+    root = build_door_cwp_root(label)
+
+    setup_cwp_and_assert(root, state, success=False, failure_message=error)
+
+
+def test_cleanup_feel_expression_leaves_feel_alone():
+    assert CwpEdge.cleanup_feel_expression("a = 1 and  b != 2") == "a = 1 and b != 2"
+
+
+@pytest.mark.parametrize("folder", ["face2face", "phware", "simple_example"])
+def test_feel_fixture_cwp_loads_with_feel_trees(folder):
+    state = build_state((FEEL_RESOURCES / folder / "state.txt").read_text())
+    cwp_file = "test_cwp.xml" if folder == "simple_example" else "cwp.xml"
+    root = ElementTree.parse(FEEL_RESOURCES / folder / cwp_file).getroot()
+
+    cwp = setup_cwp_and_assert(root, state)
+
+    assert len(cwp.edges) > 1
+    assert all(edge.expression_tree is not None for edge in cwp.edges.values())
+
+
+# simple_example's conditions (x > 5) happen to be valid FEEL, so it is left out
+@pytest.mark.parametrize("folder", ["face2face", "phware"])
+def test_old_format_fixture_cwp_fails_with_feel_error(folder):
+    resources = Path(__file__).parent.parent / "resources"
+    state = build_state((resources / folder / "state.txt").read_text())
+    root = ElementTree.parse(resources / folder / "cwp.xml").getroot()
+
+    setup_cwp_and_assert(root, state, success=False, failure_message=FeelSyntaxError)

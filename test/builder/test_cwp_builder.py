@@ -9,7 +9,13 @@ from bpmncwpverify.core.cwp import Cwp, CwpEdge, CwpState
 from bpmncwpverify.core.error import (
     CwpNoEndStatesError,
     CwpNoParentEdgeError,
+    FeelConditionTypeError,
+    FeelSyntaxError,
+    FeelUnknownNameError,
+    FeelUnsupportedError,
 )
+from bpmncwpverify.core.feel_tree import BinaryOp, Boolean, Name, Number
+from bpmncwpverify.core.state import State
 
 
 @pytest.fixture
@@ -39,19 +45,88 @@ def test_gen_edge_name(builder):
     assert builder.gen_edge_name() == "EdgeC"
 
 
-def test_check_expression(mocker):
-    mock_expr_checker = mocker.MagicMock()
-    mock_expr_checker.type_check.return_value = Success(None)
+def _door_state():
+    return State.from_str(
+        "enum Door {open closed}\nvar door: Door = closed\nvar count: byte = 0"
+    ).unwrap()
 
-    state = mocker.MagicMock()
 
+def _builder_with_edge():
     builder = CwpBuilder()
-    builder._cwp = Cwp()
-    builder._cwp.edges = {"edge": mocker.MagicMock(), "parent": mocker.MagicMock()}
+    edge = CwpEdge("edge", "EdgeA")
+    builder._cwp.edges["edge"] = edge
+    return builder, edge
 
-    expression = "expression"
 
-    builder.check_expression(mock_expr_checker, expression, "parent", state)
+def test_check_expression(mocker):
+    builder, edge = _builder_with_edge()
+
+    builder.check_expression(
+        mocker.Mock(),
+        "<div>door = open and</div><div>count = 3</div>",
+        "edge",
+        _door_state(),
+    )
+
+    assert edge.expression == "door = open and count = 3"
+    assert edge.expression_tree == BinaryOp(
+        "and",
+        BinaryOp("=", Name("door"), Name("open")),
+        BinaryOp("=", Name("count"), Number(3)),
+    )
+
+
+@pytest.mark.parametrize(
+    "expression, error",
+    [
+        ("door == open", FeelSyntaxError),
+        ("door = open &amp;&amp; count = 3", FeelSyntaxError),
+        ("count = 1 || count = 2", FeelSyntaxError),
+        ("some x in [1] satisfies x > 0", FeelUnsupportedError),
+        ("count + 1", FeelConditionTypeError),
+        ("light = on", FeelUnknownNameError),
+    ],
+)
+def test_check_expression_with_bad_feel_raises_feel_error(mocker, expression, error):
+    builder, edge = _builder_with_edge()
+
+    with pytest.raises(Exception) as exc_info:
+        builder.check_expression(mocker.Mock(), expression, "edge", _door_state())
+
+    assert isinstance(exc_info.value.args[0], error)
+    assert edge.expression_tree is None
+
+
+def test_with_start_edge_stores_init_condition_as_feel():
+    builder = CwpBuilder()
+    start = CwpState("s", "s")
+    start.out_edges.append(CwpEdge("e", "EdgeB"))
+    builder._cwp.states["s"] = start
+    builder.find_start_state()
+    edge = CwpEdge("Init_Edge", "EdgeA")
+    edge.expression = "door == closed && count == 0"
+
+    builder.with_start_edge(edge)
+
+    assert edge.expression == "door = closed and count = 0"
+    assert edge.expression_tree == BinaryOp(
+        "and",
+        BinaryOp("=", Name("door"), Name("closed")),
+        BinaryOp("=", Name("count"), Number(0)),
+    )
+
+
+def test_with_start_edge_without_variables_is_true():
+    builder = CwpBuilder()
+    start = CwpState("s", "s")
+    start.out_edges.append(CwpEdge("e", "EdgeB"))
+    builder._cwp.states["s"] = start
+    builder.find_start_state()
+    edge = CwpEdge("Init_Edge", "EdgeA")
+
+    builder.with_start_edge(edge)
+
+    assert edge.expression_tree == Boolean(True)
 
 
 def test_check_expression_no_parent(mocker):

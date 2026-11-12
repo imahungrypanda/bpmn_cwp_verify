@@ -1,6 +1,7 @@
 # type: ignore
 import pytest
 
+from bpmncwpverify.core.feel import parse
 from bpmncwpverify.util.stringmanager import (
     NL_DOUBLE,
     NL_SINGLE,
@@ -40,16 +41,17 @@ class TestCwpPromelaVisitor:
 
         calls = [
             mocker.call("inline updateState() {", NL_SINGLE, IndentAction.INC),
-            mocker.call(prime_vars, indent_offset=1),
+            mocker.call(prime_vars),
             mocker.call("if", NL_SINGLE, IndentAction.INC),
-            mocker.call(proper_path_block, indent_offset=1),
-            mocker.call(":: else ->", NL_SINGLE, IndentAction.INC),
-            mocker.call('DBG(printf("Assert: Not a valid CWP transition"))', NL_SINGLE),
-            mocker.call("assert(false)", NL_SINGLE),
-            mocker.call("fi", NL_SINGLE, IndentAction.DECTWO),
-            mocker.call(var_reassignment, indent_offset=1),
-            mocker.call("test_val", indent_offset=1),
-            mocker.call("}", NL_DOUBLE, IndentAction.DEC),
+            mocker.call(proper_path_block),
+            mocker.call(
+                ':: else -> printf("Assert: Not a valid CWP transition"); assert false',
+                NL_SINGLE,
+            ),
+            mocker.call("fi", NL_SINGLE, IndentAction.DEC),
+            mocker.call(var_reassignment),
+            mocker.call("test_val"),
+            mocker.call("}", NL_SINGLE, IndentAction.DEC),
         ]
 
         mock_write_str.assert_has_calls(calls)
@@ -107,12 +109,12 @@ class TestCwpPromelaVisitor:
 
         mock_state = mocker.Mock()
         mock_state.in_edges = [
-            mocker.Mock(expression="in_edge1"),
-            mocker.Mock(expression="in_edge2"),
+            mocker.Mock(expression_tree=parse("a = 1").unwrap()),
+            mocker.Mock(expression_tree=parse("b = 1").unwrap()),
         ]
         mock_state.out_edges = [
-            mocker.Mock(expression="out_edge1"),
-            mocker.Mock(expression="out_edge2"),
+            mocker.Mock(expression_tree=parse("c = 1").unwrap()),
+            mocker.Mock(expression_tree=parse("d = 1").unwrap()),
         ]
         visitor = CwpPromelaVisitor()
 
@@ -120,9 +122,9 @@ class TestCwpPromelaVisitor:
 
         calls = [
             mocker.call("("),
-            mocker.call("in_edge1 && in_edge2"),
+            mocker.call("(a == 1) && (b == 1)"),
             mocker.call(") && !("),
-            mocker.call("out_edge1 || out_edge2"),
+            mocker.call("(c == 1) || (d == 1)"),
             mocker.call(")"),
         ]
 
@@ -166,13 +168,11 @@ class TestCwpPromelaVisitor:
             mocker.call("int sumOfActiveStates = "),
             mocker.call("state1 + state2 + state3", NL_DOUBLE),
             mocker.call("if", NL_SINGLE, IndentAction.INC),
-            mocker.call(":: (sumOfActiveStates != 1) ->", NL_SINGLE, IndentAction.INC),
-            mocker.call("DBG(stateLogger())", NL_SINGLE),
             mocker.call(
-                'DBG(printf("Assert: In more that one or no state"))', NL_SINGLE
+                ':: (sumOfActiveStates != 1) -> {printf("Assert: In more that one or no state"); assert false}',
+                NL_SINGLE,
             ),
-            mocker.call("assert(false)", NL_SINGLE),
-            mocker.call(":: else -> skip", NL_SINGLE, IndentAction.DEC),
+            mocker.call(":: else -> skip", NL_SINGLE),
             mocker.call("fi", NL_SINGLE, IndentAction.DEC),
         ]
 

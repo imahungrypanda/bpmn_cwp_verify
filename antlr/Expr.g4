@@ -38,11 +38,6 @@ mulDivExpr
 
 unaryExpr
     :   '-' unaryExpr                       # Negate
-    |   postfixExpr                         # ToPostfix
-    ;
-
-postfixExpr
-    :   ID '[' ID ']'                       # ArrayAccess
     |   atom                                # ToAtom
     ;
 

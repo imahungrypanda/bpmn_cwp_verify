@@ -1,5 +1,4 @@
 import json
-import os
 import subprocess
 
 from bpmncwpverify.core.bpmn import Bpmn
@@ -14,7 +13,7 @@ class ErrorTrace:
 
     __slots__ = ["id", "changed_vars", "cur_cwp_state", "related_variables"]
 
-    def __init__(self, id: str, changed_vars: list[str], cur_cwp_state: list[str]):
+    def __init__(self, id: str, changed_vars: list[str], cur_cwp_state: str):
         self.id = id
         self.changed_vars = changed_vars
         self.cur_cwp_state = cur_cwp_state
@@ -65,16 +64,8 @@ class CounterExample:
         """
         Generate a counterexample from the given file path and error.
         """
-        working_dir = os.path.dirname(file_path)
-        filename = os.path.basename(file_path)
-        subprocess.run(
-            ["spin", "-DDEBUG", "-run", filename], cwd=working_dir, capture_output=True
-        ).stdout
         spin_trace_string = subprocess.run(
-            ["spin", "-DDEBUG", "-t", file_path],
-            cwd=working_dir,
-            capture_output=True,
-            text=True,
+            ["spin", "-t", file_path], capture_output=True, text=True
         ).stdout
         filtered_str = CounterExample.filter_spin_trace(spin_trace_string)
         vars = CounterExample.extract_init_variables(filtered_str)
@@ -119,7 +110,7 @@ class CounterExample:
         steps: list[ErrorTrace] = []
         id = ""
         changed_variables: list[str] = []
-        state: list[str] = []
+        state = ""
         issue = ""
 
         while line_index < len(lines):
@@ -131,7 +122,7 @@ class CounterExample:
                 elif id in bpmn.id_to_element:
                     id = bpmn.id_to_element[id].name
 
-                state = []
+                state = ""
                 line_index += 1
 
             elif "Changed Vars:" in lines[line_index]:
@@ -143,7 +134,7 @@ class CounterExample:
                     line_index += 1
 
             elif "Current state:" in lines[line_index]:
-                state.append(lines[line_index].split(":", 1)[1].strip())
+                state = lines[line_index].split(":", 1)[1].strip()
                 line_index += 1
 
             else:

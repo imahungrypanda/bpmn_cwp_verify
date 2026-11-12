@@ -1,387 +1,184 @@
-# type: ignore
-"""
-Integration tests for CbmcBuilder — end-to-end C generation from real test fixtures.
-
-Run with:
-    pytest test/builder/test_cbmc_builder.py -v
-
-To also run the CBMC verification step, install cbmc and run:
-    pytest test/builder/test_cbmc_builder.py -v -m cbmc
-"""
-
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
+from xml.etree.ElementTree import parse
 
 import pytest
 from returns.pipeline import is_successful
-from returns.unsafe import unsafe_perform_io
+from returns.result import Failure
 
+from bpmncwpverify.builder.cbmc_bound import compute_unwinding_bound
 from bpmncwpverify.builder.cbmc_builder import CbmcBuilder
 from bpmncwpverify.core.accessmethods import bpmnmethods
 from bpmncwpverify.core.accessmethods.cwpmethods import CwpXmlParser
-from bpmncwpverify.core.error import get_error_message
+from bpmncwpverify.core.bpmn import (
+    Bpmn,
+    EndEvent,
+    Process,
+    SequenceFlow,
+    StartEvent,
+    Task,
+)
+from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedElementError,
+    CbmcBuildError,
+    NotInitializedError,
+)
 from bpmncwpverify.core.state import State
-from bpmncwpverify.util.file import element_tree_from_string, read_file_as_string
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-RESOURCES = Path(__file__).parent.parent / "resources"
-SIMPLE = RESOURCES / "simple_example"
-FACE2FACE = RESOURCES / "face2face"
-
-# Resource filenames (matches existing test conventions)
-# simple_open.bpmn's task behavior is FEEL syntax, so this points at the
-# feel/ sibling directory (task_MWMokA: `x = x + 1` -> `(x, [x], x + 1)`).
-SIMPLE_STATE = SIMPLE / "feel" / "state.txt"
-SIMPLE_CWP = SIMPLE / "feel" / "test_cwp.xml"
-SIMPLE_BPMN = SIMPLE / "feel" / "simple_open.bpmn"
-
-FACE2FACE_FEEL_STATE = FACE2FACE / "feel" / "state.txt"
-FACE2FACE_FEEL_CWP = FACE2FACE / "feel" / "cwp.xml"
-FACE2FACE_FEEL_BPMN = FACE2FACE / "feel" / "workflow.bpmn"
+RESOURCES = Path(__file__).parent.parent / "resources" / "feel"
+needs_cbmc = pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc missing")
 
 
-def _build_c(
-    state_path: Path, cwp_path: Path, bpmn_path: Path, max_retries: int = 2
-) -> str:
-    """Run the full parse+build pipeline and return the generated C string."""
-    state_str_io = read_file_as_string(str(state_path))
-    state_str = unsafe_perform_io(state_str_io.unwrap())
+def _load(folder: str, bpmn_file: str, cwp_file: str):
+    base = RESOURCES / folder
+    state = State.from_str((base / "state.txt").read_text()).unwrap()
+    cwp = CwpXmlParser.from_xml(parse(base / cwp_file).getroot(), state).unwrap()
+    bpmn = bpmnmethods.from_xml(parse(base / bpmn_file).getroot(), state).unwrap()
+    return state, cwp, bpmn
 
-    cwp_str_io = read_file_as_string(str(cwp_path))
-    cwp_str = unsafe_perform_io(cwp_str_io.unwrap())
 
-    bpmn_str_io = read_file_as_string(str(bpmn_path))
-    bpmn_str = unsafe_perform_io(bpmn_str_io.unwrap())
+def _simple():
+    return _load("simple_example", "simple_open.bpmn", "test_cwp.xml")
 
-    state_result = State.from_str(state_str)
-    assert is_successful(state_result), get_error_message(state_result.failure())
-    state = state_result.unwrap()
 
-    cwp_xml_io = element_tree_from_string(cwp_str)
-    cwp_xml = unsafe_perform_io(cwp_xml_io.unwrap())
+def _builder(state, cwp, bpmn) -> CbmcBuilder:
+    return CbmcBuilder().with_state(state).with_cwp(cwp).with_bpmn(bpmn)
 
-    bpmn_xml_io = element_tree_from_string(bpmn_str)
-    bpmn_xml = unsafe_perform_io(bpmn_xml_io.unwrap())
 
-    cwp_result = CwpXmlParser.from_xml(cwp_xml, state)
-    assert is_successful(cwp_result), get_error_message(cwp_result.failure())
-    cwp = cwp_result.unwrap()
+def _line_index(lines: list[str], needle: str) -> int:
+    return next(i for i, line in enumerate(lines) if needle in line)
 
-    bpmn_result = bpmnmethods.from_xml(bpmn_xml, state)
-    assert is_successful(bpmn_result), get_error_message(bpmn_result.failure())
-    bpmn = bpmn_result.unwrap()
 
-    c_result = (
-        CbmcBuilder()
-        .with_state(state)
-        .with_cwp(cwp)
-        .with_bpmn(bpmn)
-        .with_max_retries(max_retries)
-        .build()
+def _run_cbmc(tmp_path: Path, c: str, unwind: int) -> subprocess.CompletedProcess[str]:
+    path = tmp_path / "model.c"
+    path.write_text(c)
+    return subprocess.run(
+        ["cbmc", str(path), "--unwind", str(unwind)],
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
-    assert is_successful(c_result), get_error_message(c_result.failure())
-    return c_result.unwrap()
 
 
-# ── simple_example tests ────────────────────────────────────────────────────────
-
-
-class TestSimpleExampleGeneration:
-    """Tests for C generation from simple_example (single loop, one var)."""
-
-    @pytest.fixture(scope="class")
-    def c_code(self):
-        return _build_c(SIMPLE_STATE, SIMPLE_CWP, SIMPLE_BPMN)
-
-    def test_produces_non_empty_output(self, c_code):
-        assert len(c_code) > 100
-
-    def test_includes_stdbool(self, c_code):
-        assert "#include <stdbool.h>" in c_code
-
-    def test_nondet_int_declaration(self, c_code):
-        assert "int nondet_int();" in c_code
-
-    # ── BOUND ──
-
-    def test_bound_defined(self, c_code):
-        assert "#define BOUND" in c_code
-
-    def test_bound_is_8(self, c_code):
-        # acyclic depth 4 + cycle(len=2) × max_retries(2) = 4 + 4 = 8
-        import re
-
-        assert re.search(r"#define BOUND\s+8\b", c_code), (
-            "Expected BOUND == 8 (acyclic=4, cycle=2×2=4)"
-        )
-
-    # ── CWP state defines ──
-
-    def test_cwp_start_defined(self, c_code):
-        assert "#define CWP_START" in c_code
-
-    def test_cwp_increment_x_defined(self, c_code):
-        assert "#define CWP_INCREMENT_X" in c_code
-
-    def test_cwp_end_defined(self, c_code):
-        assert "#define CWP_END" in c_code
-
-    def test_cwp_num_states_is_3(self, c_code):
-        # 3 states: Start (gets Init_Edge so has in_edges), Increment_x, End
-        import re
-
-        assert re.search(r"#define CWP_NUM_STATES\s+3\b", c_code), (
-            "Expected CWP_NUM_STATES == 3"
-        )
-
-    # ── Transition defines ──
-
-    def test_transition_start_event(self, c_code):
-        assert "#define T_event_GWx9CQ" in c_code
-
-    def test_transition_task(self, c_code):
-        assert "#define T_task_MWMokA" in c_code
-
-    def test_transition_flow3_xor_branch(self, c_code):
-        # XOR gateway → one T_ per outgoing flow (x > 5 branch → end event)
-        assert "#define T_sequenceFlow_A5qFbA" in c_code
-
-    def test_transition_flow4_xor_branch(self, c_code):
-        # XOR gateway → one T_ per outgoing flow (x <= 5 branch → back to task)
-        assert "#define T_sequenceFlow_RqrzQg" in c_code
-
-    def test_transition_end_event(self, c_code):
-        assert "#define T_event_JS1LAA" in c_code
-
-    def test_five_transitions_total(self, c_code):
-        import re
-
-        count = len(re.findall(r"^#define T_", c_code, re.MULTILINE))
-        assert count == 5, f"Expected 5 transition defines, got {count}"
-
-    # ── update_cwp_state function ──
-
-    def test_update_cwp_state_signature(self, c_code):
-        assert (
-            "static void update_cwp_state(int *cwp_state, bool cwp_reached[], int x)"
-            in c_code
-        )
-
-    def test_cwp_edge_conditions_present(self, c_code):
-        assert "e_UNKNOWN_to_Start" in c_code
-        assert "e_Start_to_Increment_x" in c_code
-        assert "e_Increment_x_to_End" in c_code
-
-    def test_cwp_edge_expressions(self, c_code):
-        assert "(x == 0)" in c_code  # Init_Edge
-        assert "(x <= 5)" in c_code  # Start → Increment_x
-        assert "(x > 5)" in c_code  # Increment_x → End
-
-    def test_next_state_booleans(self, c_code):
-        assert "next_Start" in c_code
-        assert "next_Increment_x" in c_code
-        assert "next_End" in c_code
-
-    def test_p1_assertion_present(self, c_code):
-        assert "__CPROVER_assert" in c_code
-        assert "CWP P1: transition follows valid CWP edge" in c_code
-
-    # ── main() structure ──
-
-    def test_var_x_declared(self, c_code):
-        assert "int x = 0;" in c_code
-
-    def test_token_places_present(self, c_code):
-        assert "bool p_event_GWx9CQ = true;" in c_code
-        assert "bool p_task_MWMokA_FROM_event_GWx9CQ = false;" in c_code
-        assert "bool p_gateway_K0OuHg_FROM_task_MWMokA = false;" in c_code
-        assert "bool p_event_JS1LAA_FROM_gateway_K0OuHg = false;" in c_code
-        assert "bool p_task_MWMokA_FROM_gateway_K0OuHg = false;" in c_code
-
-    def test_cwp_initial_state(self, c_code):
-        # cwp_state starts at 0 (start_state); pre-loop update_cwp_state advances it
-        assert "int cwp_state = 0;" in c_code
-
-    def test_cwp_reached_initializer(self, c_code):
-        # All-false; the pre-loop update_cwp_state sets the initial reached entry
-        assert "bool cwp_reached[CWP_NUM_STATES] = {false};" in c_code
-
-    def test_initial_cwp_state_computed_before_loop(self, c_code):
-        # Pre-loop update_cwp_state call computes the initial CWP state dynamically
-        assert "update_cwp_state(&cwp_state, cwp_reached, x);" in c_code
-
-    def test_while_loop_with_bound(self, c_code):
-        assert "while (running && step < BOUND)" in c_code
-
-    def test_cprover_assume_present(self, c_code):
-        assert "__CPROVER_assume(" in c_code
-
-    def test_task_behavior_executed(self, c_code):
-        # FeelToCbmcVisitor always parenthesizes binary operators.
-        assert "x = (x + 1);" in c_code
-
-    def test_update_cwp_state_called_after_task(self, c_code):
-        assert "update_cwp_state(&cwp_state, cwp_reached, x);" in c_code
-
-    def test_end_event_sets_running_false(self, c_code):
-        assert "running = false;" in c_code
-
-    def test_end_event_reachability_var(self, c_code):
-        assert "event_JS1LAA_reached = true;" in c_code
-
-    def test_reachability_ifdef_block(self, c_code):
-        assert "#ifdef REACHABILITY" in c_code
-        assert "__CPROVER_cover(event_JS1LAA_reached);" in c_code
-
-    def test_returns_zero(self, c_code):
-        assert "return 0;" in c_code
-
-    # ── File write round-trip ──
-
-    def test_write_to_file(self, c_code):
-        with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
-            f.write(c_code)
-            path = f.name
-        assert Path(path).stat().st_size > 0
-
-
-# ── face2face/feel tests (Task.behavior / expressions as real Feel ASTs) ──────
-
-
-class TestFace2FaceFeelGeneration:
-    """End-to-end C generation from face2face/feel — the FEEL-wired fixture set.
-
-    Task behaviors here are real `(target, [], value)` triples (including
-    choose(...)-valued ones) and flow/edge guards are real FEEL boolean
-    expressions, so this is the test that exercises Task.behavior/
-    SequenceFlow.expression/CwpEdge.expression all being `Feel` end-to-end
-    through the CBMC backend, not just plain strings.
-    """
-
-    @pytest.fixture(scope="class")
-    def c_code(self):
-        return _build_c(FACE2FACE_FEEL_STATE, FACE2FACE_FEEL_CWP, FACE2FACE_FEEL_BPMN)
-
-    def test_produces_non_empty_output(self, c_code):
-        assert len(c_code) > 100
-
-    def test_no_leftover_promela_syntax(self, c_code):
-        assert "::" not in c_code
-        assert "mtype" not in c_code
-        assert not any(line.strip() == "if" for line in c_code.splitlines())
-        assert not any(line.strip() == "fi" for line in c_code.splitlines())
-
-    def test_no_feel_object_reprs(self, c_code):
-        assert "Feel object at" not in c_code
-
-    def test_triple_assignment_behavior(self, c_code):
-        assert "backpackOwner = sellerName;" in c_code
-        assert "paymentOwner = buyerName;" in c_code
-
-    def test_choose_behavior_translated(self, c_code):
-        assert "nondet_int()" in c_code
-        assert "__CPROVER_assume(" in c_code
-        assert "terms = t_choose_Activity_1unsjkg_0;" in c_code
-
-    def test_flow_guard_expression_translated(self, c_code):
-        assert "paymentOffered == paymentAmount" in c_code
-        assert "terms == agreed" in c_code
-
-    def test_edge_condition_expression_translated(self, c_code):
-        assert "paymentOwner == buyerName" in c_code
-        assert "backpackOwner == sellerName" in c_code
-
-
-class TestFace2FaceFeelCbmc:
-    """Runs the actual CBMC tool against the feel fixture. Skipped when cbmc isn't installed."""
-
-    @pytest.fixture(scope="class")
-    def c_file(self):
-        c_code = _build_c(
-            FACE2FACE_FEEL_STATE,
-            FACE2FACE_FEEL_CWP,
-            FACE2FACE_FEEL_BPMN,
-            max_retries=2,
-        )
-        with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
-            f.write(c_code)
-            return Path(f.name)
-
-    def test_cbmc_installed(self):
-        assert shutil.which("cbmc") is not None, (
-            "cbmc not found in PATH — install with: brew install cbmc"
-        )
-
-    def test_cbmc_verification_successful(self, c_file):
-        result = subprocess.run(
-            ["cbmc", str(c_file), "--unwind", "26"],
-            capture_output=True,
-            text=True,
-        )
-        assert "VERIFICATION SUCCESSFUL" in result.stdout, (
-            f"CBMC failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-        )
-
-
-# ── CBMC execution tests (require cbmc to be installed) ────────────────────────
-
-
-class TestSimpleExampleCbmc:
-    """Runs the actual CBMC tool. Skipped automatically when cbmc is not installed."""
-
-    @pytest.fixture(scope="class")
-    def c_file(self):
-        # Verification: max_retries=2 (BOUND=8) is sufficient for bug-finding.
-        c_code = _build_c(SIMPLE_STATE, SIMPLE_CWP, SIMPLE_BPMN, max_retries=2)
-        with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
-            f.write(c_code)
-            return Path(f.name)
-
-    @pytest.fixture(scope="class")
-    def c_file_reachability(self):
-        # Reachability: max_retries=8 (BOUND=20) needed to reach x>5 (end event).
-        c_code = _build_c(SIMPLE_STATE, SIMPLE_CWP, SIMPLE_BPMN, max_retries=8)
-        with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
-            f.write(c_code)
-            return Path(f.name)
-
-    def test_cbmc_installed(self):
-        assert shutil.which("cbmc") is not None, (
-            "cbmc not found in PATH — install with: brew install cbmc"
-        )
-
-    def test_cbmc_verification_successful(self, c_file):
-        """BOUND=8 (max_retries=2), --unwind 9."""
-        result = subprocess.run(
-            ["cbmc", str(c_file), "--unwind", "9"],
-            capture_output=True,
-            text=True,
-        )
-        assert "VERIFICATION SUCCESSFUL" in result.stdout, (
-            f"CBMC failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-        )
-
-    def test_cbmc_reachability(self, c_file_reachability):
-        """All CWP states and the end event must be reachable.
-        Uses max_retries=8 (BOUND=20) so x can exceed 5 and reach the end event."""
-        result = subprocess.run(
-            [
-                "cbmc",
-                str(c_file_reachability),
-                "--unwind",
-                "15",
-                "--cover",
-                "cover",
-                "-DREACHABILITY",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        # Expect: 3 of 3 covered (end event + CWP_INCREMENT_X + CWP_END).
-        # CWP_START is excluded from reachability covers (it's the CWP start state).
-        assert "3 of 3" in result.stdout or "COVERED" in result.stdout, (
-            f"Reachability incomplete.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-        )
+def _linear_bpmn() -> Bpmn:
+    """start -> task -> end"""
+    start = StartEvent("s", "s", "", "")
+    task = Task("t", "t", "")
+    end = EndEvent("e", "e", "", "")
+    for src, dst, fid in ((start, task, "f1"), (task, end, "f2")):
+        flow = SequenceFlow(fid, fid)
+        flow.source_node, flow.target_node = src, dst
+        src.add_out_flow(flow)
+        dst.add_in_flow(flow)
+    process = Process("p", "p")
+    for node in (start, task, end):
+        process[node.id] = node
+    bpmn = Bpmn()
+    bpmn.processes["p"] = process
+    return bpmn
+
+
+def test_missing_inputs_give_errors():
+    state, cwp, bpmn = _simple()
+    for builder in (
+        CbmcBuilder().with_cwp(cwp).with_bpmn(bpmn),
+        CbmcBuilder().with_state(state).with_bpmn(bpmn),
+        CbmcBuilder().with_state(state).with_cwp(cwp),
+        CbmcBuilder(),
+    ):
+        result = builder.build()
+        assert isinstance(result, Failure)
+        assert isinstance(result.failure(), NotInitializedError)
+
+
+def test_missing_bpmn_has_no_bound():
+    assert isinstance(CbmcBuilder().bound(), Failure)
+
+
+def test_state_declarations():
+    state, cwp, bpmn = _simple()
+    c = _builder(state, cwp, bpmn).build().unwrap()
+    assert "int x = 0;" in c
+
+
+def test_enums_consts_and_types():
+    state = State.from_str(
+        "enum E { a b }\nconst k: byte = 3\nvar v: E = a\nvar f: bool = false\n"
+    ).unwrap()
+    _, cwp, bpmn = _simple()
+    # the CWP and BPMN are not about this state: only the declarations matter
+    from bpmncwpverify.builder.cbmc_builder import _generate_state_c
+
+    c = _generate_state_c(state).unwrap()
+    assert "#define k 3" in c
+    assert "typedef enum { a, b } E;" in c
+    assert "E v = a;" in c
+    assert "bool f = false;" in c
+
+
+def test_unsupported_var_type_is_an_error(mocker):
+    from bpmncwpverify.builder.cbmc_builder import _generate_state_c
+
+    var = mocker.Mock(id="v", type_="weird")
+    state = mocker.Mock(consts=(), enums=(), vars=(var,))
+    result = _generate_state_c(state)
+    assert isinstance(result.failure(), CbmcBuildError)
+
+
+def test_main_sets_cwp_start_state_before_loop():
+    c = _builder(*_simple()).build().unwrap()
+    lines = c.splitlines()
+    main = _line_index(lines, "int main(void)")
+    init = _line_index(lines[main:], "cwp_init();") + main
+    loop = _line_index(lines[main:], "for (") + main
+    update = _line_index(lines[main:], "cwp_update();") + main
+    assert main < init < loop < update
+
+
+def test_loop_is_bounded_by_the_bound():
+    state, cwp, bpmn = _simple()
+    builder = _builder(state, cwp, bpmn)
+    bound = builder.bound().unwrap()
+    assert bound == compute_unwinding_bound(bpmn) > 0
+    assert f"bpmn_step < {bound}u" in builder.build().unwrap()
+
+
+def test_unsupported_bpmn_element_is_reported():
+    # face2face needs parallel gateways
+    result = _builder(*_load("face2face", "workflow.bpmn", "cwp.xml")).build()
+    if not is_successful(result):
+        assert isinstance(result.failure(), BpmnCbmcUnsupportedElementError)
+
+
+@needs_cbmc
+def test_simple_workflow_compiles_and_verifies(tmp_path):
+    builder = _builder(*_simple())
+    c = builder.build().unwrap()
+    result = _run_cbmc(tmp_path, c, builder.bound().unwrap() + 1)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "VERIFICATION SUCCESSFUL" in result.stdout
+
+
+@needs_cbmc
+def test_linear_workflow_compiles_and_verifies(tmp_path):
+    state, cwp, _ = _simple()
+    builder = _builder(state, cwp, _linear_bpmn())
+    c = builder.build().unwrap()
+    assert builder.bound().unwrap() == 3
+    result = _run_cbmc(tmp_path, c, 4)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "VERIFICATION SUCCESSFUL" in result.stdout
+
+
+def test_given_simple_when_build_then_covers_only_under_reachability_macro():
+    c = _builder(*_simple()).build().unwrap()
+    lines = c.splitlines()
+
+    for i, line in enumerate(lines):
+        if "__CPROVER_cover" in line:
+            assert any("#ifdef REACHABILITY" in earlier for earlier in lines[:i])
+    # the start state is never covered, the state after it and the end event are
+    assert "CWP state: Start" not in c
+    assert "CWP state: Increment_x" in c
+    assert "end event: event_JS1LAA" in c

@@ -1,14 +1,12 @@
 # ============================================================================
-# Base stage: Common setup (Spin + CBMC + gcc for Lambda compatibility)
-# Both dev and lambda extend this stage — they stay in sync automatically.
+# Base stage: Common setup (Spin binary + gcc for Lambda compatibility)
 # ============================================================================
 FROM public.ecr.aws/lambda/python:3.12 AS base
 
 # Install build tools and runtime dependencies
-# bison provides yacc (needed to build Spin and CBMC)
-# cmake + gcc-c++ + flex are needed to build CBMC from source
-# (no pre-built CBMC binary exists for Amazon Linux)
-RUN microdnf -y install gcc gcc-c++ make cmake tar gzip xz ca-certificates zip which wget bison flex git patch \
+# bison provides yacc (needed to build Spin)
+# Create yacc wrapper that uses bison -y for yacc compatibility
+RUN microdnf -y install gcc make tar gzip xz ca-certificates zip which wget bison git \
     && microdnf -y clean all \
     && printf '#!/usr/bin/bash\nexec /usr/bin/bison -y "$@"\n' > /usr/bin/yacc \
     && chmod +x /usr/bin/yacc
@@ -26,33 +24,16 @@ RUN wget https://github.com/nimble-code/Spin/archive/refs/tags/version-${SPIN_VE
     cd / && \
     rm -rf Spin-version-${SPIN_VERSION} version-${SPIN_VERSION}.tar.gz
 
-ARG CBMC_VERSION=6.9.0
-
-# Build CBMC from source. -DWITH_JBMC=OFF skips the Java BMC component,
-# avoiding a Java dependency and keeping the image smaller.
-RUN git clone --depth 1 --branch cbmc-${CBMC_VERSION} \
-        https://github.com/diffblue/cbmc.git /tmp/cbmc && \
-    cd /tmp/cbmc && \
-    git submodule update --init && \
-    cmake -S . -B build \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DWITH_JBMC=OFF && \
-    cmake --build build --target cbmc -j$(nproc) && \
-    cp build/bin/cbmc /opt/bin/cbmc && \
-    rm -rf /tmp/cbmc
-
-# Ensure Spin and CBMC are on PATH
+# Ensure Spin is on PATH
 ENV PATH=/opt/bin:$PATH
 
 # ============================================================================
-# Development stage: Adds Node.js (pyright) and installs the package in
-# editable mode on top of base. Dev and lambda use the same base so their
-# Spin/CBMC binaries are always identical.
+# Development stage: For local development with hot reload
 # ============================================================================
 FROM base AS dev
 
 # Install Node.js (needed for pyright and other tooling)
-ARG NODE_VERSION=18.20.8
+ARG NODE_VERSION=16.20.2
 ARG TARGETARCH
 RUN case "${TARGETARCH}" in \
         "amd64") NODE_ARCH="x64" ;; \

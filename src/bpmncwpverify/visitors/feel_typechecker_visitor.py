@@ -1,299 +1,238 @@
-from returns.maybe import Nothing, Some
-from returns.pipeline import is_successful
+from returns.result import Failure, Result, Success
 
+from bpmncwpverify.core import typechecking
 from bpmncwpverify.core.error import (
-    ErrorException,
-    ExpressionComputationCompatabilityError,
-    ExpressionIfBranchCompatabilityError,
-    ExpressionIfConditionError,
-    ExpressionLogicalCompatibilityError,
-    ExpressionOutOfScope,
-    ExpressionRelationalNotError,
-    ExpressionRelationCompatabilityError,
-    ExpressionTripleInputError,
-    ExpressionUnrecognizedID,
-    TypingAssignCompatabilityError,
-    TypingListCompatibiltiyError,
-    TypingListOfExpressionsError,
-    TypingNotCaughtError,
-    TypingNoTypeError,
-    TypingTripleVariableError,
+    Error,
+    FeelAssignTypeError,
+    FeelBehaviorTypeError,
+    FeelConditionTypeError,
+    FeelInvalidTargetError,
+    FeelMixedTypesError,
+    FeelNumberTypeError,
+    FeelOperatorTypeError,
+    FeelUnknownNameError,
 )
 from bpmncwpverify.core.feel_tree import (
-    AddNode,
-    BinaryOperatorNode,
-    BoolLiteralNode,
-    ChooseNode,
-    ComparisonOperatorNode,
-    ConditionalOperatorNode,
-    DivideNode,
-    ExpressionNode,
+    BinaryOp,
+    Boolean,
+    Choose,
+    FeelExpr,
+    FeelNode,
     FeelVisitor,
-    IfNode,
-    ListNode,
-    MultiplyNode,
-    NotNode,
-    NumberLiteralNode,
-    PowerNode,
-    QualifiedNameNode,
-    SubtractNode,
-    TripleListNode,
-    TripleNode,
+    If,
+    ListExpr,
+    Name,
+    Negate,
+    Not,
+    Number,
+    Triple,
+    TripleList,
 )
 from bpmncwpverify.core.state import State
-from bpmncwpverify.core.typechecking import (
-    BOOL,
-    get_and_or_type_result,
-    get_computation_type_result,
-    get_relational_type_result,
-    get_type_literal,
-    get_widened_type_result,
-)
+
+TRIPLE = "triple"
+TRIPLE_LIST = "triple list"
+_LIST_PREFIX = "list of "
+
+_ARITHMETIC = {"+", "-", "*", "/"}
+_ORDERING = {"<", ">", "<=", ">="}
+_EQUALITY = {"=", "!="}
+_LOGIC = {"and", "or", "xor"}
 
 
-class TypeCheckerVisitor(FeelVisitor):
-    __slots__ = ["state", "stack"]
+class _FeelTypeError(Exception):
+    """Carries an Error out of the visitor; never leaves this module."""
 
-    def __init__(self, state: State):
+    def __init__(self, error: Error) -> None:
+        super().__init__()
+        self.error = error
+
+
+def _is_value(type_: str) -> bool:
+    return type_ not in {TRIPLE, TRIPLE_LIST} and not type_.startswith(_LIST_PREFIX)
+
+
+class FeelTypeCheckerVisitor(FeelVisitor[str]):
+    """
+    Computes the type of a FEEL expression. Types are the state file's:
+    bit, byte, short, int, bool, and the name of an enum. Lists are
+    "list of T", and triples are "triple" and "triple list".
+
+    Failures are raised as _FeelTypeError; use type_check() to get a Result.
+    """
+
+    def __init__(self, state: State) -> None:
+        # requires state.type_check() to have succeeded
         self.state = state
-        self.stack: list[str] = []
+        self._vars = {v.id for v in state.vars}
 
-    def is_leaf(self, node: ExpressionNode) -> bool:
-        if isinstance(node, NumberLiteralNode):
-            return True
-        elif isinstance(node, BoolLiteralNode):
-            return True
-        elif isinstance(node, QualifiedNameNode):
-            return True
-        else:
-            return False
+    def _require_value(self, node: FeelNode, op: str, *types: str) -> None:
+        if not all(_is_value(t) for t in types):
+            raise _FeelTypeError(
+                FeelOperatorTypeError(op, types, node.line, node.column)
+            )
 
-    def end_visit_number_literal(self, node: NumberLiteralNode) -> None:
-        type = get_type_literal(node.value)
+    def _operator_error(self, node: FeelNode, op: str, *types: str) -> Error:
+        return FeelOperatorTypeError(op, types, node.line, node.column)
 
-        if is_successful(type):
-            self.stack.append(type.unwrap())
-        else:
-            raise ErrorException(TypingNoTypeError(node.value))
+    def _unify(self, node: FeelNode, construct: str, types: list[str]) -> str:
+        mixed = FeelMixedTypesError(construct, tuple(types), node.line, node.column)
+        if not all(_is_value(t) for t in types):
+            raise _FeelTypeError(mixed)
+        result = types[0]
+        for t in types[1:]:
+            unified = typechecking.get_feel_unified_type_result(result, t)
+            if not isinstance(unified, Success):
+                raise _FeelTypeError(mixed)
+            result = unified.unwrap()
+        return result
 
-    def end_visit_bool_literal(self, node: BoolLiteralNode) -> None:
-        type = get_type_literal(node.value)
+    def _lookup(self, name: str, line: int, column: int) -> str:
+        result = self.state.get_type(name)
+        type_: str = result.unwrap() if isinstance(result, Success) else ""
+        if type_ in {"", typechecking.ENUM}:
+            raise _FeelTypeError(FeelUnknownNameError(name, line, column))
+        return type_
 
-        if is_successful(type):
-            self.stack.append(type.unwrap())
+    def visit_number(self, node: Number) -> str:
+        if isinstance(node.value, float):
+            raise _FeelTypeError(
+                FeelNumberTypeError(str(node.value), node.line, node.column)
+            )
+        result = typechecking.get_type_literal(str(node.value))
+        if not isinstance(result, Success):
+            raise _FeelTypeError(
+                FeelNumberTypeError(str(node.value), node.line, node.column)
+            )
+        type_: str = result.unwrap()
+        return type_
 
-    def end_visit_qualified_name(self, node: QualifiedNameNode) -> None:
-        if self.state.is_variable(node.name):
-            self.stack.append(self.state.get_type(node.name).unwrap())
-        elif self.state.is_enum(node.name):
-            self.stack.append(self.state.get_type(node.name).unwrap())
-        elif self.state.is_constant(node.name):
-            self.stack.append(self.state.get_type(node.name).unwrap())
-        else:
-            raise ErrorException(ExpressionUnrecognizedID(node.name))
+    def visit_boolean(self, node: Boolean) -> str:
+        return typechecking.BOOL
 
-    def visit_list(self, node: ListNode) -> bool:
-        for item in node.values:
-            if not self.is_leaf(item):
-                raise ErrorException(TypingListOfExpressionsError())
+    def visit_name(self, node: Name) -> str:
+        return self._lookup(node.name, node.line, node.column)
 
-        return True
-
-    def end_visit_list(self, node: ListNode) -> None:
-        items = len(node.values)
-        if items == 0:
-            self.stack.append("None")
-        else:
-            first = self.stack[len(self.stack) - items]
-            for _ in range(items):
-                next = self.stack.pop()
-                new_type = get_widened_type_result(first, next)
-                if not is_successful(new_type):
-                    raise ErrorException(TypingListCompatibiltiyError(first, next))
-                first = new_type.unwrap()
-            self.stack.append(first)
-            node.type = Some(first)
-
-    def end_visit_binary_operator(self, node: BinaryOperatorNode) -> None:
-        right = self.stack.pop()
-        left = self.stack.pop()
-
-        type = get_computation_type_result(left, right)
-
-        if is_successful(type):
-            self.stack.append(type.unwrap())
-        else:
-            raise ErrorException(ExpressionComputationCompatabilityError(left, right))
-
-    def end_visit_add(self, node: AddNode) -> None:
-        pass
-
-    def end_visit_subtract(self, node: SubtractNode) -> None:
-        pass
-
-    def end_visit_multiply(self, node: MultiplyNode) -> None:
-        pass
-
-    def end_visit_divide(self, node: DivideNode) -> None:
-        pass
-
-    def end_visit_pow(self, node: PowerNode) -> None:
-        pass
-
-    def end_visit_comparision(self, node: ComparisonOperatorNode) -> None:
-        right = self.stack.pop()
-        left = self.stack.pop()
-
-        type = get_relational_type_result(left, right)
-
-        if is_successful(type):
-            self.stack.append(type.unwrap())
-        else:
-            raise ErrorException(ExpressionRelationCompatabilityError(left, right))
-
-    def end_visit_conditional(self, node: ConditionalOperatorNode) -> None:
-        right = self.stack.pop()
-        left = self.stack.pop()
-
-        type = get_and_or_type_result(left, right)
-
-        if is_successful(type):
-            self.stack.append(type.unwrap())
-        else:
-            raise ErrorException(ExpressionLogicalCompatibilityError(left, right))
-
-    def end_visit_not(self, node: NotNode) -> None:
-        type = self.stack.pop()
-
-        if type == BOOL:
-            self.stack.append(type)
-        else:
-            raise ErrorException(ExpressionRelationalNotError(type))
-
-    def end_visit_if(self, node: IfNode) -> None:
-        elsedo_type = self.stack.pop()
-        thendo_type = self.stack.pop()
-        cond_type = self.stack.pop()
-
-        if cond_type == BOOL:
-            result_type = get_widened_type_result(thendo_type, elsedo_type)
-
-            if is_successful(result_type):
-                self.stack.append(result_type.unwrap())
-            else:
-                raise ErrorException(
-                    ExpressionIfBranchCompatabilityError(thendo_type, elsedo_type)
-                )
-        else:
-            raise ErrorException(ExpressionIfConditionError(cond_type))
-
-    def end_visit_choose(self, node: ChooseNode) -> None:
-        list_type = self.stack.pop()
-
-        self.stack.append(list_type)
-
-    def visit_triple(self, node: TripleNode) -> bool:
-        target_input_visitor = TypeCheckerTripleInputTargetVisitor(
-            self.stack, self.state
+    def visit_list(self, node: ListExpr) -> str:
+        if not node.items:
+            return _LIST_PREFIX + "nothing"
+        return _LIST_PREFIX + self._unify(
+            node, "a list", [self.visit(i) for i in node.items]
         )
-        value_visitor = TypeCheckerTripleValueVisitor(self.stack, self.state)
-        value_visitor.scope = []
 
-        for input in node.inputs.values:
-            if isinstance(input, QualifiedNameNode):
-                value_visitor.scope.append(input.name)
-            else:
-                raise ErrorException(ExpressionTripleInputError())
+    def visit_binary_op(self, node: BinaryOp) -> str:
+        ltype = self.visit(node.left)
+        rtype = self.visit(node.right)
+        self._require_value(node, node.op, ltype, rtype)
 
-        node.inputs.accept(target_input_visitor)
-        node.value.accept(value_visitor)
+        def error(lt: str, rt: str) -> Error:
+            return self._operator_error(node, node.op, lt, rt)
 
-        if not isinstance(node.target, QualifiedNameNode):
-            raise ErrorException(
-                TypingNotCaughtError(
-                    "TYPE ERROR: frist argument in triple needs to be a qualifiedNameNode and typechecker did not catch it."
+        result: Result[str, Error]
+        if node.op in _ARITHMETIC:
+            result = typechecking.get_feel_arithmetic_type_result(ltype, rtype, error)
+        elif node.op == "**":
+            result = typechecking.get_feel_arithmetic_type_result(
+                ltype, rtype, error
+            ).map(lambda _: typechecking.INT)
+        elif node.op in _ORDERING or node.op in _EQUALITY:
+            result = typechecking.get_feel_comparison_type_result(
+                ltype, rtype, node.op in _ORDERING, error
+            )
+        else:
+            assert node.op in _LOGIC
+            result = typechecking.get_and_or_type_result(ltype, rtype, error)
+        if isinstance(result, Failure):
+            raise _FeelTypeError(result.failure())
+        return result.unwrap()
+
+    def visit_not(self, node: Not) -> str:
+        operand = self.visit(node.operand)
+        if operand != typechecking.BOOL:
+            raise _FeelTypeError(self._operator_error(node, "not", operand))
+        return typechecking.BOOL
+
+    def visit_negate(self, node: Negate) -> str:
+        operand = self.visit(node.operand)
+        self._require_value(node, "-", operand)
+        result = typechecking.get_feel_negate_type_result(
+            operand, lambda t: self._operator_error(node, "-", t)
+        )
+        if isinstance(result, Failure):
+            raise _FeelTypeError(result.failure())
+        return result.unwrap()
+
+    def visit_if(self, node: If) -> str:
+        condition = self.visit(node.condition)
+        if condition != typechecking.BOOL:
+            raise _FeelTypeError(
+                FeelConditionTypeError(condition, node.line, node.column)
+            )
+        return self._unify(
+            node,
+            "an if",
+            [self.visit(node.then_branch), self.visit(node.else_branch)],
+        )
+
+    def visit_choose(self, node: Choose) -> str:
+        if not node.options:
+            raise _FeelTypeError(
+                FeelMixedTypesError("a choose", (), node.line, node.column)
+            )
+        return self._unify(node, "a choose", [self.visit(o) for o in node.options])
+
+    def visit_triple(self, node: Triple) -> str:
+        if node.target not in self._vars:
+            reason = (
+                "it is not a variable"
+                if self.state.is_defined(node.target)
+                else "it is not defined"
+            )
+            raise _FeelTypeError(
+                FeelInvalidTargetError(node.target, reason, node.line, node.column)
+            )
+        target_type = self._lookup(node.target, node.line, node.column)
+        for name in node.inputs:
+            self._lookup(name, node.line, node.column)
+        value_type = self.visit(node.value)
+        if not _is_value(value_type) or not isinstance(
+            typechecking.get_type_assign(target_type, value_type), Success
+        ):
+            raise _FeelTypeError(
+                FeelAssignTypeError(
+                    node.target, target_type, value_type, node.line, node.column
                 )
             )
-        node.target.accept(target_input_visitor)
+        return TRIPLE
 
-        return False
-
-    def end_visit_triple(self, node: TripleNode) -> None:
-        target_type = self.stack.pop()
-        value_type = self.stack.pop()
-        self.stack.pop()  # input types
-
-        if target_type == value_type:
-            self.stack.append(target_type)
-        else:
-            raise ErrorException(
-                TypingAssignCompatabilityError(target_type, value_type)
-            )
-
-    def end_visit_triple_list(self, node: TripleListNode) -> None:
-        for _ in range(len(node.triples)):
-            self.stack.pop()
-        self.stack.append("triples")
+    def visit_triple_list(self, node: TripleList) -> str:
+        for triple in node.triples:
+            self.visit(triple)
+        return TRIPLE_LIST
 
 
-class TypeCheckerTripleInputTargetVisitor(TypeCheckerVisitor):
-    __slots__ = ["stack", "state"]
-
-    def __init__(self, stack: list[str], state: State) -> None:
-        self.stack = stack
-        self.state = state
-
-    def end_visit_qualified_name(self, node: QualifiedNameNode) -> None:
-        if self.state.is_variable(node.name):
-            self.stack.append(self.state.get_type(node.name).unwrap())
-        elif self.state.is_enum(node.name):
-            raise ErrorException(TypingTripleVariableError(node.name))
-        else:
-            raise ErrorException(ExpressionUnrecognizedID(node.name))
-
-    def end_visit_list(self, node: ListNode) -> None:
-        items = len(node.values)
-        if items == 0:
-            self.stack.append("None")
-        else:
-            for _ in range(items):
-                self.stack.pop()
-            self.stack.append("None")
-            node.type = Nothing
+def type_check(expr: FeelExpr, state: State) -> Result[str, Error]:
+    """
+    Returns the type of expr, or the first type error found. The state must
+    already be type checked.
+    """
+    try:
+        return Success(FeelTypeCheckerVisitor(state).visit(expr))
+    except _FeelTypeError as exc:
+        return Failure(exc.error)
 
 
-class TypeCheckerTripleValueVisitor(TypeCheckerVisitor):
-    __slots__ = ["stack", "state", "scope"]
+def type_check_condition(expr: FeelExpr, state: State) -> Result[str, Error]:
+    """Like type_check, and the expression must be a bool."""
+    result = type_check(expr, state)
+    if isinstance(result, Success) and result.unwrap() != typechecking.BOOL:
+        return Failure(FeelConditionTypeError(result.unwrap(), expr.line, expr.column))
+    return result
 
-    def __init__(self, stack: list[str], state: State) -> None:
-        self.stack = stack
-        self.state = state
-        self.scope: list[str] = []
 
-    def end_visit_qualified_name(self, node: QualifiedNameNode) -> None:
-        if self.state.is_variable(node.name):
-            if node.name in self.scope:
-                self.stack.append(self.state.get_type(node.name).unwrap())
-            else:
-                raise ErrorException(ExpressionOutOfScope(node.name))
-        elif self.state.is_enum(node.name):
-            self.stack.append(self.state.get_type(node.name).unwrap())
-        elif self.state.is_constant(node.name):
-            self.stack.append(self.state.get_type(node.name).unwrap())
-        else:
-            raise ErrorException(ExpressionUnrecognizedID(node.name))
-
-    def end_visit_list(self, node: ListNode) -> None:
-        items = len(node.values)
-        if items == 0:
-            self.stack.append("None")
-        else:
-            first = self.stack[len(self.stack) - items]
-            for _ in range(items):
-                next = self.stack.pop()
-                new_type = get_widened_type_result(first, next)
-                if not is_successful(new_type):
-                    raise ErrorException(TypingListCompatibiltiyError(first, next))
-                first = new_type.unwrap()
-            self.stack.append(first)
-            node.type = Some(first)
+def type_check_behavior(expr: FeelExpr, state: State) -> Result[str, Error]:
+    """Like type_check, and the expression must be a triple or a triple list."""
+    result = type_check(expr, state)
+    if isinstance(result, Success) and result.unwrap() not in {TRIPLE, TRIPLE_LIST}:
+        return Failure(FeelBehaviorTypeError(result.unwrap()))
+    return result

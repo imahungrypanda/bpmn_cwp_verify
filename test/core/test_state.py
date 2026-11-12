@@ -13,7 +13,6 @@ from bpmncwpverify.antlr.StateParser import StateParser
 from bpmncwpverify.core import typechecking
 from bpmncwpverify.core.error import (
     Error,
-    StateArraySizeError,
     StateInitNotInValues,
     StateMultipleDefinitionError,
     StateSyntaxError,
@@ -235,15 +234,6 @@ class Test_SymbolTable_build:
             (
                 "enum E {e f} var c : E = e {f}",
                 StateInitNotInValues("e", Some(1), Some(25), {"f"}),
-            ),
-            # Array initialized with bad size
-            (
-                "array a[0]: int = {0 1} var a: int = 0",
-                StateArraySizeError("a", Some(1), Some(6), 0, 2),
-            ),
-            (
-                "array b[2]: int = {0 1 2} var a: int = 0",
-                StateArraySizeError("b", Some(1), Some(6), 2, 3),
             ),
         ],
     )

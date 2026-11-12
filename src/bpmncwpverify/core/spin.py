@@ -189,7 +189,7 @@ class SpinOutputParser:
 
         # Regular expression to match line information
         line_pattern = re.compile(
-            r"(?P<file>[\w\.]+):(?P<line>\d+), state \d+, (?P<message>\"(?!.*assert).*?\")"
+            r"(?P<file>[\w\.]+):(?P<line>\d+), state \d+, (?P<message>\"(?!.*Assert).*?\")"
         )
 
         # Find all relevant blocks (excluding never claims)
