@@ -7,6 +7,9 @@ from returns.pipeline import is_successful
 
 from bpmncwpverify.core.accessmethods.cwpmethods import CwpXmlParser
 from bpmncwpverify.core.cwp import Cwp, CwpEdge, CwpState
+from bpmncwpverify.core.error import FeelCbmcUnsupportedError
+from bpmncwpverify.core.feel import parse
+from bpmncwpverify.core.feel_tree import FeelExpr
 from bpmncwpverify.core.state import State
 from bpmncwpverify.visitors.cwp_cbmc_visitor import (
     END_STR,
@@ -14,10 +17,15 @@ from bpmncwpverify.visitors.cwp_cbmc_visitor import (
     CwpCbmcVisitor,
 )
 
-RESOURCES = Path(__file__).parent.parent / "resources"
+RESOURCES = Path(__file__).parent.parent / "resources" / "feel"
 
 needs_cbmc = pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc not found")
 needs_gcc = pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not found")
+
+
+def _feel(text: str) -> FeelExpr | None:
+    """The FEEL tree of a condition, None for no condition."""
+    return parse(text).unwrap() if text else None
 
 
 def _make_cwp(
@@ -31,11 +39,13 @@ def _make_cwp(
     cwp.start_state.init_state = True
     init = CwpEdge("Init_Edge", "Init")
     init.expression = init_expr
+    init.expression_tree = _feel(init_expr)
     init.set_dest(cwp.start_state)
     cwp.start_state.in_edges.append(init)
     for i, (src, dst, expr) in enumerate(edges):
         edge = CwpEdge(f"e{i}", f"Edge{i}")
         edge.expression = expr
+        edge.expression_tree = _feel(expr)
         edge.set_source(cwp.states[src])
         edge.set_dest(cwp.states[dst])
         cwp.states[src].out_edges.append(edge)
@@ -67,12 +77,12 @@ def _diamond() -> Cwp:
     return _make_cwp(
         ["Start", "Mid", "Mid2", "End"],
         [
-            ("Start", "Mid", "x == 1"),
-            ("Mid", "Mid2", "x == 2"),
-            ("Mid", "End", "x == 3"),
-            ("Mid2", "End", "x == 3"),
+            ("Start", "Mid", "x = 1"),
+            ("Mid", "Mid2", "x = 2"),
+            ("Mid", "End", "x = 3"),
+            ("Mid2", "End", "x = 3"),
         ],
-        "x == 0",
+        "x = 0",
     )
 
 
@@ -131,11 +141,11 @@ class TestStructure:
         assert "for (" not in out and "while" not in out
 
     def test_empty_expression_is_true(self):
-        cwp = _make_cwp(["A", "B"], [("A", "B", "")], "x == 0")
+        cwp = _make_cwp(["A", "B"], [("A", "B", "")], "x = 0")
         assert "!(1)" in _generate(cwp)
 
     def test_state_name_sanitized(self):
-        cwp = _make_cwp(["A", "B C"], [("A", "B C", "x == 1")], "x == 0")
+        cwp = _make_cwp(["A", "B C"], [("A", "B C", "x = 1")], "x = 0")
         assert "CWP_STATE_B_C," in _generate(cwp)
 
     def test_each_state_emitted_once(self):
@@ -143,9 +153,7 @@ class TestStructure:
         assert out.count("CWP_STATE_End,") == 1
 
     def test_self_loop_edge_not_duplicated_in_valid_moves(self):
-        cwp = _make_cwp(
-            ["A", "B"], [("A", "A", "x == 5"), ("A", "B", "x == 1")], "x == 0"
-        )
+        cwp = _make_cwp(["A", "B"], [("A", "A", "x = 5"), ("A", "B", "x = 1")], "x = 0")
         out = _generate(cwp)
         assert "valid = next == CWP_STATE_A || next == CWP_STATE_B;" in out
 
@@ -206,7 +214,7 @@ class TestCbmc:
     def test_overlapping_states_fail(self, tmp_path):
         # B and C are both active when x == 1
         cwp = _make_cwp(
-            ["A", "B", "C"], [("A", "B", "x == 1"), ("A", "C", "x == 1")], "x == 0"
+            ["A", "B", "C"], [("A", "B", "x = 1"), ("A", "C", "x = 1")], "x = 0"
         )
         body = "x = 1; cwp_init(); return 0;"
         result = _run_cbmc(tmp_path, _program(_generate(cwp), body))
@@ -250,3 +258,17 @@ def test_face2face_cwp_compiles_and_initializes(tmp_path):
     result = _run_cbmc(tmp_path, program)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "VERIFICATION SUCCESSFUL" in result.stdout
+
+
+def test_unsupported_edge_condition_is_an_error():
+    cwp = _make_cwp(["A", "B"], [("A", "B", "x ** 9 > 1")], "x = 0")
+    visitor = CwpCbmcVisitor()
+    cwp.accept(visitor)
+    assert isinstance(visitor.get_result().failure(), FeelCbmcUnsupportedError)
+    assert "#error" in str(visitor)
+
+
+def test_get_result_is_the_generated_c():
+    visitor = CwpCbmcVisitor()
+    _diamond().accept(visitor)
+    assert visitor.get_result().unwrap() == str(visitor)

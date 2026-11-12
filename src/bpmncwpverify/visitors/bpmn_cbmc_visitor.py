@@ -19,6 +19,7 @@ from bpmncwpverify.core.bpmn import (
 from bpmncwpverify.core.error import BpmnCbmcUnsupportedElementError, Error
 from bpmncwpverify.util.stringmanager import IndentAction, StringManager
 from bpmncwpverify.visitors.cwp_cbmc_visitor import UPDATE_FUNC
+from bpmncwpverify.visitors.feel_to_cbmc_visitor import behavior_to_c, condition_to_c
 
 ##############
 # Constants
@@ -26,10 +27,6 @@ from bpmncwpverify.visitors.cwp_cbmc_visitor import UPDATE_FUNC
 HELPER_DEFS_STR = "#include <stdbool.h>\n\nunsigned int nondet_uint(void);\n"
 CHOICE_VAR = "bpmn_choice"
 OCCUPIED_VAR = "bpmn_occupied"
-ALT_VAR = "bpmn_alt"
-_ASSIGN_RE = re.compile(r"^[A-Za-z_]\w*\s*=(?!=)")
-_INCDEC_RE = re.compile(r"^[A-Za-z_]\w*\s*(\+\+|--)$")
-_ASSERT_RE = re.compile(r"^assert\s*\((.*)\)$")
 NL_NONE = 0
 NL_SINGLE = 1
 NL_DOUBLE = 2
@@ -56,7 +53,7 @@ class Transition:
     the statements that run once it is chosen.
     """
 
-    __slots__ = ["label", "enable", "body"]
+    __slots__ = ["body", "enable", "label"]
 
     def __init__(self, label: str, enable: str, body: list[str]) -> None:
         self.label = label
@@ -71,13 +68,12 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
     """
 
     __slots__ = [
-        "places",
-        "ended_flags",
-        "transitions",
-        "errors",
-        "_visited",
         "_process_id",
-        "_alt_count",
+        "_visited",
+        "ended_flags",
+        "errors",
+        "places",
+        "transitions",
     ]
 
     def __init__(self) -> None:
@@ -87,7 +83,6 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         self.errors: list[Error] = []
         self._visited: set[str] = set()
         self._process_id = ""
-        self._alt_count = 0
 
     ####################
     # Helpers
@@ -139,88 +134,18 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
             *[f"{place} = true;" for place in places],
         ]
 
-    def _statement(self, task: Task, text: str) -> list[str]:
-        """Translates one behavior statement (no `;`) into C."""
-        text = " ".join(text.split())
-        if not text or text == "skip":
-            return []
-        if _ASSIGN_RE.match(text) or _INCDEC_RE.match(text):
-            return [f"{text};"]
-        assertion = _ASSERT_RE.match(text)
-        if assertion:
-            expr = assertion.group(1)
-            return [f'__CPROVER_assert({expr}, "behavior of {task.id}");']
-        self._unsupported(task, f"behavior statement '{text}'")
-        return []
-
-    def _choice(self, task: Task, lines: list[str], pos: int) -> tuple[int, list[str]]:
-        """
-        Translates an `if :: guard -> body ... fi` starting after the `if` at
-        lines[pos - 1]. Like Promela, it picks any option whose guard holds,
-        and blocks when none does.
-        """
-        options: list[tuple[str, list[str]]] = []
-        while pos < len(lines) and lines[pos].startswith("::"):
-            guard, arrow, rest = lines[pos][2:].partition("->")
-            if not arrow:
-                self._unsupported(task, f"behavior option '{lines[pos]}'")
-                return len(lines), []
-            lines[pos] = rest.strip()
-            if not lines[pos]:
-                pos += 1
-            pos, body = self._block(task, lines, pos)
-            options.append((" ".join(guard.split()), body))
-        if pos >= len(lines) or lines[pos] != "fi" or not options:
-            self._unsupported(task, "behavior with a malformed if")
-            return len(lines), []
-        explicit = [g for g, _ in options if g != "else"]
-        sm = StringManager()
-        sm.write_str("{", NL_SINGLE, IndentAction.INC)
-        alt = f"{ALT_VAR}_{self._alt_count}"
-        self._alt_count += 1
-        sm.write_str(f"unsigned int {alt} = nondet_uint();", NL_SINGLE)
-        sm.write_str(f"__CPROVER_assume({alt} < {len(options)}u);", NL_SINGLE)
-        sm.write_str(f"switch ({alt}) {{", NL_SINGLE)
-        for index, (guard, body) in enumerate(options):
-            if guard == "else":
-                guard = " && ".join(f"!({g})" for g in explicit) or "true"
-            sm.write_str(f"case {index}:", NL_SINGLE, IndentAction.INC)
-            sm.write_str(f"__CPROVER_assume({guard});", NL_SINGLE)
-            for line in body:
-                sm.write_str(line, NL_SINGLE)
-            sm.write_str("break;", NL_SINGLE, IndentAction.DEC)
-        sm.write_str("}", NL_SINGLE)
-        sm.write_str("}", NL_SINGLE, IndentAction.DEC)
-        return pos + 1, repr(sm).splitlines()
-
-    def _block(self, task: Task, lines: list[str], pos: int) -> tuple[int, list[str]]:
-        """Translates statements until a `::` or `fi` line, or the end."""
-        out: list[str] = []
-        while pos < len(lines):
-            line = lines[pos]
-            if line == "fi" or line.startswith("::"):
-                break
-            pos += 1
-            if line == "if":
-                pos, code = self._choice(task, lines, pos)
-                out += code
-            else:
-                for text in line.split(";"):
-                    out += self._statement(task, text)
-        return pos, out
-
     def _behavior(self, task: Task) -> list[str]:
         """
-        Translates the task's behavior into C, ending with the CWP update when
-        the behavior is not empty (the Promela visitor does the same).
+        Translates the task's FEEL behavior into C, ending with the CWP update
+        when the task has a behavior (the Promela visitor does the same).
         """
-        lines = [line.strip() for line in task.behavior.split("\n") if line.strip()]
-        if not lines:
+        if task.behavior_tree is None:
             return []
-        pos, code = self._block(task, lines, 0)
-        if pos < len(lines):
-            self._unsupported(task, f"behavior line '{lines[pos]}'")
-        return code + [f"{UPDATE_FUNC}();"]
+        code = behavior_to_c(task.behavior_tree)
+        if isinstance(code, Failure):
+            self.errors.append(code.failure())
+            return []
+        return code.unwrap() + [f"{UPDATE_FUNC}();"]
 
     def _add_node_transition(
         self,
@@ -373,10 +298,14 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         )
         return True
 
-    @staticmethod
-    def _flow_condition(flow: SequenceFlow) -> str:
-        expression = " ".join(flow.expression.split())
-        return expression if expression else "true"
+    def _flow_condition(self, flow: SequenceFlow) -> str:
+        if flow.expression_tree is None:
+            return "true"
+        condition = condition_to_c(flow.expression_tree)
+        if isinstance(condition, Failure):
+            self.errors.append(condition.failure())
+            return "true"
+        return condition.unwrap()
 
     def visit_parallel_gateway(self, gateway: ParallelGatewayNode) -> bool:
         if not self._first_visit(gateway):

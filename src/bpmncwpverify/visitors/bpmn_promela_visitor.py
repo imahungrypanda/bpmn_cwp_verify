@@ -12,7 +12,12 @@ from bpmncwpverify.core.bpmn import (
     StartEvent,
     Task,
 )
+from bpmncwpverify.core.feel_tree import FeelExpr
 from bpmncwpverify.util.stringmanager import IndentAction, StringManager
+from bpmncwpverify.visitors.feel_to_promela_visitor import (
+    behavior_to_promela,
+    condition_to_promela,
+)
 
 ##############
 # Constants
@@ -43,7 +48,7 @@ class Context:
         self._is_parallel = False
         self._has_option = False
         self._behavior_model = True
-        self._behavior = ""
+        self._behavior: FeelExpr | None = None
         self._end_event = False
         self._boundary_events: list[Task.BoundaryEvent] = []
 
@@ -76,11 +81,11 @@ class Context:
         self._is_parallel = new_val
 
     @property
-    def behavior(self) -> str:
+    def behavior(self) -> FeelExpr | None:
         return self._behavior
 
     @behavior.setter
-    def behavior(self, new_val: str) -> None:
+    def behavior(self, new_val: FeelExpr | None) -> None:
         assert isinstance(self._element, Task), (
             "only tasks can have a behavior associated with them."
         )
@@ -202,10 +207,14 @@ class PromelaGenVisitor(BpmnVisitor):
 
     def _get_expressions(self, ctx: Context) -> list[str]:
         """
-        Returns a list of the expressions that lie on the flows leaving a specific
-        node. Example: ["x > 5"]
+        Returns a list of the Promela conditions that lie on the flows leaving a
+        specific node. Example: ["(x > 5)"]
         """
-        return [flow.expression for flow in ctx.element.out_flows if flow.expression]
+        return [
+            condition_to_promela(flow.expression_tree)
+            for flow in ctx.element.out_flows
+            if flow.expression_tree is not None
+        ]
 
     def _build_expr_conditional(self, ctx: Context) -> StringManager:
         """
@@ -226,7 +235,7 @@ class PromelaGenVisitor(BpmnVisitor):
                 self._get_expressions(ctx), self._get_put_locations(ctx.element)
             ):
                 sm.write_str(
-                    f":: {expression.replace('\n', '')} -> putToken({location})",
+                    f":: {expression} -> putToken({location})",
                     NL_SINGLE,
                 )
         if ctx.boundary_events:
@@ -379,8 +388,9 @@ class PromelaGenVisitor(BpmnVisitor):
         self.behaviors.write_str(
             f"inline {ctx.element.id}_BehaviorModel() {{", NL_SINGLE, IndentAction.INC
         )
+        behavior = behavior_to_promela(ctx.behavior) if ctx.behavior is not None else ""
         processed_str_list = [
-            line.strip() for line in ctx.behavior.split("\n") if line.strip()
+            line.strip() for line in behavior.split("\n") if line.strip()
         ]
 
         for line in processed_str_list:
@@ -391,7 +401,7 @@ class PromelaGenVisitor(BpmnVisitor):
             else:
                 self.behaviors.write_str(line, NL_SINGLE)
 
-        if ctx.behavior:
+        if ctx.behavior is not None:
             self.behaviors.write_str("updateState()", NL_SINGLE)
         else:
             self.behaviors.write_str("skip", NL_SINGLE)
@@ -449,7 +459,7 @@ class PromelaGenVisitor(BpmnVisitor):
 
     def visit_task(self, task: Task) -> bool:
         context = Context(task)
-        context.behavior = task.behavior
+        context.behavior = task.behavior_tree
         context.boundary_events = task.msg_boundary_events
         self._gen_behavior_model(context)
         self._gen_var_defs(context)
