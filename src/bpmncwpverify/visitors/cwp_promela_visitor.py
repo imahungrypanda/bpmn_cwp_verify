@@ -5,10 +5,16 @@ from bpmncwpverify.util.stringmanager import (
     IndentAction,
     StringManager,
 )
+from bpmncwpverify.visitors.feel_to_promela_visitor import condition_to_promela
 
 START_STR = "//**********CWP VARIABLE DECLARATION************//"
 END_STR = "//**********************************************//"
 PRIME_SUFFIX = "_prime"
+
+
+def _condition(edge: CwpEdge) -> str:
+    assert edge.expression_tree is not None, f"edge {edge.id} has no FEEL condition"
+    return condition_to_promela(edge.expression_tree)
 
 
 class CwpPromelaVisitor(CwpVisitor):
@@ -39,7 +45,7 @@ class CwpPromelaVisitor(CwpVisitor):
         guard.write_str("(")
         guard.write_str(
             " && ".join(
-                [f"{edge.expression}" for edge in state.in_edges]
+                [_condition(edge) for edge in state.in_edges]
                 if state.in_edges
                 else ["true"]
             )
@@ -49,7 +55,7 @@ class CwpPromelaVisitor(CwpVisitor):
 
         guard.write_str(
             " || ".join(
-                [f"{edge.expression}" for edge in state.out_edges]
+                [_condition(edge) for edge in state.out_edges]
                 if state.out_edges
                 else ["false"]
             )

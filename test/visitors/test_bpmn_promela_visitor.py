@@ -1,6 +1,7 @@
 import pytest
 
 from bpmncwpverify.core.bpmn import IntermediateEvent, ParallelGatewayNode, Task
+from bpmncwpverify.core.feel import parse
 from bpmncwpverify.util.stringmanager import IndentAction, StringManager
 from bpmncwpverify.visitors.bpmn_promela_visitor import (
     NL_NONE,
@@ -362,6 +363,10 @@ def test_build_atomic_block(promela_visitor, mocker):
     assert str(atomic_block) == expected_output
 
 
+def _tree(text):
+    return parse(text).unwrap()
+
+
 def test_gen_behavior_model(mocker):
     pv1 = PromelaGenVisitor()
     node1 = mocker.Mock()
@@ -369,17 +374,17 @@ def test_gen_behavior_model(mocker):
 
     ctx = mocker.Mock(spec=Context)
     ctx.element = node1
-    ctx.behavior = ""
+    ctx.behavior = None
 
     pv1._gen_behavior_model(ctx)
     assert str(pv1.behaviors) == "inline TEST_BehaviorModel() {\n\tskip\n}\n\n"
 
     pv2 = PromelaGenVisitor()
-    ctx.behavior = "content"
+    ctx.behavior = _tree("(x, [], 1)")
     pv2._gen_behavior_model(ctx)
     assert (
         str(pv2.behaviors)
-        == "inline TEST_BehaviorModel() {\n\tcontent\n\tupdateState()\n}\n\n"
+        == "inline TEST_BehaviorModel() {\n\tx = 1\n\tupdateState()\n}\n\n"
     )
 
 
@@ -389,14 +394,12 @@ def test_gen_behavior_model_with_behavior(promela_visitor, mocker):
 
     ctx = mocker.Mock(spec=Context)
     ctx.element = node1
-    ctx.behavior = (
-        "\n\n\n\nif\n\n\n\n\t\t   :: true -> test\n\n :: true -> test2\n\nfi\n\n\n"
-    )
+    ctx.behavior = _tree("((x, [], choose [1, 2]), (y, [x], x + 1))")
 
     promela_visitor._gen_behavior_model(ctx)
     assert (
         str(promela_visitor.behaviors)
-        == "inline TEST_BehaviorModel() {\n\tif\n\t\t:: true -> test\n\t\t:: true -> test2\n\tfi\n\tupdateState()\n}\n\n"
+        == "inline TEST_BehaviorModel() {\n\tif\n\t\t:: x = 1\n\t\t:: x = 2\n\tfi\n\ty = (x + 1)\n\tupdateState()\n}\n\n"
     )
 
 
@@ -438,11 +441,11 @@ def test_build_expr_conditional(promela_visitor, mocker):
     flow1, flow2 = mocker.Mock(), mocker.Mock()
     flow1.source_node = node1
     flow1.target_node = node2
-    flow1.expression = "EXPR1\n==test_val"
+    flow1.expression_tree = _tree("a = b")
 
     flow2.source_node = node1
     flow2.target_node = node3
-    flow2.expression = "EXPR2"
+    flow2.expression_tree = _tree("c")
 
     node1.out_flows = [flow1, flow2]
     node1.out_msgs = []
@@ -460,8 +463,8 @@ def test_build_expr_conditional(promela_visitor, mocker):
     mock_write_str.assert_has_calls(
         [
             mocker.call("if", NL_SINGLE),
-            mocker.call(":: EXPR1==test_val -> putToken(TEST2_FROM_TEST1)", NL_SINGLE),
-            mocker.call(":: EXPR2 -> putToken(TEST3_FROM_TEST1)", NL_SINGLE),
+            mocker.call(":: (a == b) -> putToken(TEST2_FROM_TEST1)", NL_SINGLE),
+            mocker.call(":: c -> putToken(TEST3_FROM_TEST1)", NL_SINGLE),
             mocker.call(
                 ':: atomic{else -> printf("Assert: No viable path to take"); assert false}',
                 NL_SINGLE,
@@ -525,16 +528,16 @@ def test_get_expressions(promela_visitor, mocker):
     ctx.element = node
 
     flow1 = mocker.Mock()
-    flow1.expression = "TEST_EXPR1"
+    flow1.expression_tree = _tree("x > 5")
     flow2 = mocker.Mock()
-    flow2.expression = "TEST_EXPR2"
+    flow2.expression_tree = _tree("flag")
     flow3 = mocker.Mock()
-    flow3.expression = None
+    flow3.expression_tree = None
 
     node.out_flows = [flow1, flow2, flow3]
 
     result = promela_visitor._get_expressions(ctx)
-    assert result == ["TEST_EXPR1", "TEST_EXPR2"]
+    assert result == ["(x > 5)", "flag"]
 
 
 def test_context_setters(mocker):
