@@ -448,6 +448,16 @@ class FeelInvalidTargetError(Error):
         self.column = column
 
 
+class FeelCbmcUnsupportedError(Error):
+    __slots__ = ["column", "construct", "line"]
+
+    def __init__(self, construct: str, line: int, column: int) -> None:
+        super().__init__()
+        self.construct = construct
+        self.line = line
+        self.column = column
+
+
 class FeelMixedTypesError(Error):
     __slots__ = ["column", "construct", "line", "types"]
 
@@ -868,6 +878,8 @@ def get_error_message(error: Error) -> str:
             return f"FEEL SYNTAX ERROR: {msg}"
         case FeelUnsupportedError(construct=construct, line=line, column=column):
             return f"FEEL ERROR: {construct} (line {line}:{column}) is not supported; only numbers, booleans, names, lists, arithmetic, comparisons, logic, 'if', 'choose' and triples can be used"
+        case FeelCbmcUnsupportedError(construct=construct, line=line, column=column):
+            return f"FEEL ERROR: {construct} (line {line}:{column}) cannot be expressed in C for CBMC"
         case FeelAssignTypeError(
             target=target,
             target_type=target_type,

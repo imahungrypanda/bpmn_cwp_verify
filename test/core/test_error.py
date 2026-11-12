@@ -53,6 +53,7 @@ from bpmncwpverify.core.error import (
     ExpressionUnrecognizedID,
     FeelAssignTypeError,
     FeelBehaviorTypeError,
+    FeelCbmcUnsupportedError,
     FeelConditionTypeError,
     FeelInvalidTargetError,
     FeelMixedTypesError,
@@ -273,6 +274,10 @@ test_inputs: list[tuple[Error, str]] = [
         "FEEL ERROR: a string (line 1:2) is not supported; only numbers, booleans, names, lists, arithmetic, comparisons, logic, 'if', 'choose' and triples can be used",
     ),
     (
+        FeelCbmcUnsupportedError("a list", 1, 2),
+        "FEEL ERROR: a list (line 1:2) cannot be expressed in C for CBMC",
+    ),
+    (
         FeelAssignTypeError("x", "byte", "bool", 1, 2),
         "FEEL TYPE ERROR: (line 1:2) 'x' has type 'byte' and cannot be assigned a value of type 'bool'",
     ),
@@ -439,6 +444,7 @@ test_ids: list[str] = [
     "ExpressionUnrecognizedID",
     "FeelSyntaxError",
     "FeelUnsupportedError",
+    "FeelCbmcUnsupportedError",
     "FeelAssignTypeError",
     "FeelBehaviorTypeError",
     "FeelConditionTypeError",
