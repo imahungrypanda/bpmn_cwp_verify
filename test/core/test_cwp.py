@@ -1,4 +1,6 @@
 # type: ignore
+from pathlib import Path
+from xml.etree import ElementTree
 from xml.etree.ElementTree import Element, SubElement
 
 import pytest
@@ -12,7 +14,12 @@ from bpmncwpverify.core.error import (
     CwpNoEndStatesError,
     CwpNoStartStateError,
     Error,
+    FeelConditionTypeError,
+    FeelOperatorTypeError,
+    FeelSyntaxError,
+    FeelUnsupportedError,
 )
+from bpmncwpverify.core.feel_tree import BinaryOp, Name, Number
 from bpmncwpverify.core.state import State
 
 
@@ -214,3 +221,104 @@ def test_cwp_edge_from_xml_with_no_id(mocker):
         CwpEdge.from_xml(mock_element, "test")
 
     assert exc_info.value.args[0] == "No ID for edge or no targetRef"
+
+
+FEEL_RESOURCES = Path(__file__).parent.parent / "resources" / "feel"
+
+DOOR_STATE = """
+enum Door {open closed}
+enum Light {on off}
+
+var door: Door = closed
+var light: Light = off
+var count: byte = 0
+"""
+
+
+def build_door_cwp_root(label):
+    root, mx_root = get_root_mx_root()
+    add_mx_cell(mx_root, id="s1", value="Start", style="rounded=1;state", vertex="1")
+    add_mx_cell(mx_root, id="s2", value="End", style="rounded=1;state", vertex="1")
+    add_mx_cell(mx_root, id="e1", source="s1", target="s2", style="edge", edge="1")
+    add_mx_cell(
+        mx_root, id="expr1", value=label, style="edgeLabel", parent="e1", vertex="1"
+    )
+    return root
+
+
+def test_cwp_edge_condition_is_stored_as_feel_tree():
+    state = build_state(DOOR_STATE)
+    root = build_door_cwp_root("light = on or count = 3")
+
+    cwp = setup_cwp_and_assert(root, state)
+
+    assert cwp.edges["e1"].expression == "light = on or count = 3"
+    assert cwp.edges["e1"].expression_tree == BinaryOp(
+        "or",
+        BinaryOp("=", Name("light"), Name("on")),
+        BinaryOp("=", Name("count"), Number(3)),
+    )
+    assert cwp.edges["Init_Edge"].expression_tree == BinaryOp(
+        "and",
+        BinaryOp(
+            "and",
+            BinaryOp("=", Name("door"), Name("closed")),
+            BinaryOp("=", Name("light"), Name("off")),
+        ),
+        BinaryOp("=", Name("count"), Number(0)),
+    )
+
+
+def test_cwp_edge_condition_html_is_stripped_before_parsing():
+    state = build_state(DOOR_STATE)
+    root = build_door_cwp_root(
+        "&lt;div&gt;door = open and&lt;/div&gt;&lt;div&gt;count &amp;lt; 3&lt;br&gt;&lt;/div&gt;"
+    )
+
+    cwp = setup_cwp_and_assert(root, state)
+
+    assert cwp.edges["e1"].expression == "door = open and count < 3"
+    assert cwp.edges["e1"].expression_tree is not None
+
+
+@pytest.mark.parametrize(
+    "label, error",
+    [
+        ("light == on", FeelSyntaxError),
+        ("light = on &amp;&amp; count = 3", FeelSyntaxError),
+        ("count + 1", FeelConditionTypeError),
+        ("light = open", FeelOperatorTypeError),
+        ("some x in [1] satisfies x > 0", FeelUnsupportedError),
+    ],
+)
+def test_cwp_edge_condition_not_in_feel_fails_with_feel_error(label, error):
+    state = build_state(DOOR_STATE)
+    root = build_door_cwp_root(label)
+
+    setup_cwp_and_assert(root, state, success=False, failure_message=error)
+
+
+def test_cleanup_feel_expression_leaves_feel_alone():
+    assert CwpEdge.cleanup_feel_expression("a = 1 and  b != 2") == "a = 1 and b != 2"
+
+
+@pytest.mark.parametrize("folder", ["face2face", "phware", "simple_example"])
+def test_feel_fixture_cwp_loads_with_feel_trees(folder):
+    state = build_state((FEEL_RESOURCES / folder / "state.txt").read_text())
+    cwp_file = "test_cwp.xml" if folder == "simple_example" else "cwp.xml"
+    root = ElementTree.parse(FEEL_RESOURCES / folder / cwp_file).getroot()
+
+    cwp = setup_cwp_and_assert(root, state)
+
+    assert len(cwp.edges) > 1
+    assert all(edge.expression_tree is not None for edge in cwp.edges.values())
+
+
+# simple_example's conditions (x > 5) happen to be valid FEEL, so it is left out
+@pytest.mark.parametrize("folder", ["face2face", "phware"])
+def test_old_format_fixture_cwp_fails_with_feel_error(folder):
+    resources = Path(__file__).parent.parent / "resources"
+    state = build_state((resources / folder / "state.txt").read_text())
+    root = ElementTree.parse(resources / folder / "cwp.xml").getroot()
+
+    setup_cwp_and_assert(root, state, success=False, failure_message=FeelSyntaxError)

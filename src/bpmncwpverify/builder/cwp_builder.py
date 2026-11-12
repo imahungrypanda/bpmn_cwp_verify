@@ -11,6 +11,8 @@ from bpmncwpverify.core.error import (
     Error,
 )
 from bpmncwpverify.core.expr import ExpressionListener
+from bpmncwpverify.core.feel import parse, type_check_condition
+from bpmncwpverify.core.feel_tree import Boolean
 from bpmncwpverify.core.state import State
 from bpmncwpverify.visitors.cwp_connectivity_visitor import CwpConnectivityVisitor
 
@@ -61,7 +63,7 @@ class CwpBuilder:
 
     def check_expression(
         self,
-        expr_checker: ExpressionListener,
+        _expr_checker: ExpressionListener,  # unused: conditions are FEEL now
         expression: str,
         parent: str,
         state: State,
@@ -69,10 +71,15 @@ class CwpBuilder:
         edge = self._cwp.edges.get(parent)
         if not edge:
             raise Exception(CwpNoParentEdgeError(parent))
-        edge.expression = CwpEdge.cleanup_expression(expression)
-        result = expr_checker.type_check(edge.expression, state)
-        if not_(is_successful)(result):
-            raise Exception(result.failure())
+        edge.expression = CwpEdge.cleanup_feel_expression(expression)
+        parsed = parse(edge.expression)
+        if not_(is_successful)(parsed):
+            raise Exception(parsed.failure())
+        tree = parsed.unwrap()
+        checked = type_check_condition(tree, state)
+        if not_(is_successful)(checked):
+            raise Exception(checked.failure())
+        edge.expression_tree = tree
 
     def with_state(self, cwpState: CwpState) -> "CwpBuilder":
         self._cwp.states[cwpState.id] = cwpState
@@ -99,6 +106,16 @@ class CwpBuilder:
         return self
 
     def with_start_edge(self, edge: CwpEdge) -> "CwpBuilder":
+        # CwpXmlParser builds the init edge's condition in the old syntax
+        feel_text = edge.expression.replace("==", "=").replace("&&", "and")
+        if feel_text.strip():
+            parsed = parse(feel_text)
+            if not_(is_successful)(parsed):
+                raise Exception(parsed.failure())
+            edge.expression = feel_text
+            edge.expression_tree = parsed.unwrap()
+        else:
+            edge.expression_tree = Boolean(True)
         dest = self._cwp.states[self._cwp.start_state.id]
         dest.in_edges.append(edge)
         edge.set_dest(dest)

@@ -4,6 +4,8 @@ from xml.etree.ElementTree import Element
 
 from bs4 import BeautifulSoup
 
+from bpmncwpverify.core.feel_tree import FeelExpr
+
 
 class Cwp:
     __slots__ = ["states", "edges", "start_state", "end_states"]
@@ -54,7 +56,16 @@ class CwpState:
 
 
 class CwpEdge:
-    __slots__ = ["id", "name", "expression", "parent_id", "source", "dest", "is_leaf"]
+    __slots__ = [
+        "id",
+        "name",
+        "expression",
+        "expression_tree",
+        "parent_id",
+        "source",
+        "dest",
+        "is_leaf",
+    ]
 
     def __init__(self, id: str, name: str) -> None:
         self.id = id
@@ -62,6 +73,7 @@ class CwpEdge:
         self.expression: str = (
             ""  # TODO: expression needs to always be on an edge and cannot be empty
         )
+        self.expression_tree: FeelExpr | None = None
         self.parent_id: str
 
         self.source: CwpState | None = None
@@ -141,6 +153,17 @@ class CwpEdge:
         ).strip()  # strips all extra spaces and leading/ending whitespace if any
 
         return decoded
+
+    @staticmethod
+    def cleanup_feel_expression(expression: str) -> str:
+        """
+        Turns an edge label into FEEL text: decodes HTML entities, drops the
+        markup draw.io wraps labels in and collapses whitespace.
+        """
+        decoded = CwpEdge.deep_decode(expression)
+        if CwpEdge.has_html(decoded):
+            decoded = BeautifulSoup(decoded, "html.parser").get_text(" ", strip=True)
+        return re.sub(r"\s+", " ", decoded).strip()
 
     @staticmethod
     def from_xml(element: Element, name: str) -> "CwpEdge":

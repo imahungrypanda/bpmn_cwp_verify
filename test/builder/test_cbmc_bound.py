@@ -17,7 +17,7 @@ from bpmncwpverify.core.bpmn import (
 )
 from bpmncwpverify.core.state import State
 
-FACE2FACE = "./test/resources/face2face/"
+FACE2FACE = "./test/resources/feel/face2face/"
 
 
 def _node(kind, id):
