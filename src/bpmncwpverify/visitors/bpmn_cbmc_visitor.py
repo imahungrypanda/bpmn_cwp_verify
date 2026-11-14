@@ -26,6 +26,10 @@ NL_SINGLE = 1
 NL_DOUBLE = 2
 CHOICE_VAR = "bpmn_choice"
 NONDET_DECL = "unsigned int nondet_uint(void);"
+ASSIGN_RE = re.compile(r"^[A-Za-z_]\w*(\[[^\]]*\])?\s*(=(?!=)|\+=|-=)\s*\S.*$")
+INCDEC_RE = re.compile(r"^[A-Za-z_]\w*(\[[^\]]*\])?\s*(\+\+|--)$")
+ASSERT_RE = re.compile(r"^assert\s*\((.*)\)$", re.DOTALL)
+CWP_UPDATE = "cwp_update();"
 NO_VIABLE_PATH_MSG = "No viable path to take"
 OCCUPIED_MSG = "Attempting to place token in already-occupied place"
 
@@ -47,6 +51,130 @@ def msg_place(flow_id: str) -> str:
 
 def ended_flag(process_id: str) -> str:
     return f"ended_{_sanitize(process_id)}"
+
+
+class _UnsupportedBehavior(Exception):
+    pass
+
+
+def _behavior_items(behavior: str) -> list[tuple[str, str]]:
+    """
+    Splits a behavior into ("if" | "fi" | "opt" | "stmt", text) items. An
+    option's text is its guard; whatever follows `->` on its line becomes the
+    next item.
+    """
+    items: list[tuple[str, str]] = []
+
+    def add(text: str) -> None:
+        text = text.strip()
+        if not text:
+            return
+        if text.startswith("::"):
+            guard, arrow, rest = text[2:].partition("->")
+            items.append(("opt", guard.strip()))
+            if arrow:
+                add(rest)
+        elif text == "if" or text.startswith("if "):
+            items.append(("if", ""))
+            add(text[2:])
+        elif text == "fi":
+            items.append(("fi", ""))
+        else:
+            items.append(("stmt", text))
+
+    for line in behavior.split("\n"):
+        # `;` separates statements, but not inside parentheses
+        depth, start = 0, 0
+        for pos, char in enumerate(line):
+            depth += (char == "(") - (char == ")")
+            if char == ";" and depth == 0:
+                add(line[start:pos])
+                start = pos + 1
+        add(line[start:])
+    return items
+
+
+class _BehaviorTranslator:
+    """
+    Translates the Promela-flavored behavior of a task to C statements. Supports
+    assignments, `assert`, `skip`, and (nested) `if ... fi`. An `if` picks a
+    nondeterministic option whose guard holds; `else` is taken only when no
+    other guard holds, and an `if` with nothing enabled blocks, as in Promela.
+    """
+
+    def __init__(self, behavior: str, task_id: str) -> None:
+        self.items = _behavior_items(behavior)
+        self.pos = 0
+        self.task_id = task_id
+        self.choices = 0
+
+    def translate(self) -> list[str]:
+        lines = self._block(0)
+        if self.pos < len(self.items):
+            raise _UnsupportedBehavior(self.items[self.pos][0])
+        return lines
+
+    def _block(self, depth: int) -> list[str]:
+        out: list[str] = []
+        indent = "\t" * depth
+        while self.pos < len(self.items):
+            kind, text = self.items[self.pos]
+            if kind in ("fi", "opt"):
+                break
+            self.pos += 1
+            if kind == "if":
+                out += self._if(depth)
+            elif text == "skip":
+                continue
+            elif match := ASSERT_RE.match(text):
+                msg = f"Assert: behavior of {self.task_id}"
+                out.append(f'{indent}__CPROVER_assert({match.group(1)}, "{msg}");')
+            elif ASSIGN_RE.match(text) or INCDEC_RE.match(text):
+                out.append(f"{indent}{text};")
+            else:
+                raise _UnsupportedBehavior(text)
+        return out
+
+    def _if(self, depth: int) -> list[str]:
+        options: list[tuple[str, list[str]]] = []
+        while self.pos < len(self.items) and self.items[self.pos][0] == "opt":
+            guard = self.items[self.pos][1]
+            self.pos += 1
+            options.append((guard, self._block(depth + 2)))
+        if (
+            self.pos >= len(self.items)
+            or self.items[self.pos][0] != "fi"
+            or not options
+        ):
+            raise _UnsupportedBehavior("if")
+        self.pos += 1
+
+        indent = "\t" * depth
+        var = f"bpmn_if_{self.choices}"
+        self.choices += 1
+        explicit = [f"({g})" for g, _ in options if g and g != "else"]
+        out = [
+            f"{indent}{{",
+            f"{indent}\tunsigned int {var} = nondet_uint();",
+            f"{indent}\t__CPROVER_assume({var} < {len(options)});",
+            f"{indent}\tswitch ({var}) {{",
+        ]
+        for index, (guard, body) in enumerate(options):
+            if guard == "else":
+                cond = f"!({' || '.join(explicit)})" if explicit else "1"
+            else:
+                cond = f"({guard})"
+            out.append(f"{indent}\tcase {index}:")
+            out.append(f"{indent}\t\t__CPROVER_assume({cond});")
+            out += body
+            out.append(f"{indent}\t\tbreak;")
+        out += [
+            f"{indent}\tdefault:",
+            f"{indent}\t\t__CPROVER_assume(0);",
+            f"{indent}\t}}",
+            f"{indent}}}",
+        ]
+        return out
 
 
 class Transition:
@@ -160,18 +288,22 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
             msg_place(flow.id) for flow in element.out_msgs
         ]
 
-    def _guard(self, element: Node) -> str:
+    def _guard(self, element: Node, all_in: bool = False) -> str:
         """
-        The element's incoming places: a token on any sequence flow, and on
-        every message flow.
+        The element's incoming places: a token on any sequence flow (on every
+        one if `all_in`), and on every message flow.
         """
         seq, msgs = self._in_places(element)
-        parts = [f"({' || '.join(seq)})"] if seq else []
+        joiner = " && " if all_in else " || "
+        parts = [f"({joiner.join(seq)})"] if seq else []
         parts += [f"({' && '.join(msgs)})"] if msgs else []
         return " && ".join(parts)
 
-    def _enable(self, element: Node, *extra: str) -> str:
-        parts = [f"!{ended_flag(self._current_process)}", self._guard(element)]
+    def _enable(self, element: Node, *extra: str, all_in: bool = False) -> str:
+        parts = [
+            f"!{ended_flag(self._current_process)}",
+            self._guard(element, all_in),
+        ]
         parts += extra
         return " && ".join(parts)
 
@@ -201,12 +333,18 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
             )
         )
 
-    def _gen_behavior(self, task: Task) -> list[str]:
+    def _gen_behavior(self, task: Task) -> list[str] | None:
         """
-        The statements that run a task's behavior. Placeholder until task
-        behaviors are supported.
+        The statements that run a task's behavior, ending with the CWP update
+        when there is one. None if the behavior can't be expressed in C.
         """
-        return [f"/* behavior of {task.id} */"]
+        if not task.behavior:
+            return []
+        try:
+            lines = _BehaviorTranslator(task.behavior, task.id).translate()
+        except _UnsupportedBehavior:
+            return None
+        return [*lines, CWP_UPDATE]
 
     def _simple_transition(
         self,
@@ -314,7 +452,10 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
             return False
         if task.msg_boundary_events:
             return self._unsupported(task, "task with boundary events")
-        self._simple_transition(task, self._gen_behavior(task))
+        behavior = self._gen_behavior(task)
+        if behavior is None:
+            return self._unsupported(task, "task behavior")
+        self._simple_transition(task, behavior)
         return True
 
     def visit_boundary_event(self, boundary_event: Task.BoundaryEvent) -> bool:
@@ -344,7 +485,17 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         return True
 
     def visit_parallel_gateway(self, gateway: ParallelGatewayNode) -> bool:
-        return self._unsupported(gateway, "parallel gateway")
+        if not self._first_visit(gateway):
+            return False
+        # A fork starts when any incoming flow has a token (a loop can come
+        # back into it); a join waits for all of them
+        self._add_transition(
+            gateway,
+            gateway.id,
+            self._enable(gateway, all_in=not gateway.is_fork),
+            self._out_places(gateway),
+        )
+        return True
 
     def visit_message_flow(self, flow: MessageFlow) -> bool:
         # Message flows become places through the nodes at their ends

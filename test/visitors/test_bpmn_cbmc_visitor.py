@@ -94,9 +94,9 @@ def test_step_is_one_choice_without_loops():
     assert "ended_P1 = true;" in step
 
 
-def test_task_behavior_placeholder():
+def test_empty_behavior_has_no_cwp_update():
     v = generate(linear())
-    assert "/* behavior of T */" in repr(v.step)
+    assert "cwp_update" not in repr(v.step)
 
 
 def test_intermediate_event():
@@ -193,14 +193,12 @@ def test_message_flow():
     assert "static bool msg_M = false;" in repr(v.defs)
 
 
-@pytest.mark.parametrize("kind", ["parallel", "boundary", "start_with_in"])
+@pytest.mark.parametrize("kind", ["boundary", "start_with_in"])
 def test_unsupported_elements_give_error(kind):
     bpmn, proc = make()
     start = node(proc, StartEvent, "S", "", "")
     end = node(proc, EndEvent, "E", "", "")
-    if kind == "parallel":
-        mid = node(proc, ParallelGatewayNode, "PG")
-    elif kind == "boundary":
+    if kind == "boundary":
         mid = node(proc, Task, "T", "")
         mid.add_boundary_event(Task.BoundaryEvent("B", "B", "", "", "T"))
     else:
@@ -212,6 +210,18 @@ def test_unsupported_elements_give_error(kind):
     assert v.errors
     assert all(isinstance(e, BpmnUnsupportedForCError) for e in v.errors)
     assert isinstance(v.result(), Failure)
+
+
+def test_unsupported_behavior_gives_error():
+    bpmn, proc = make()
+    start = node(proc, StartEvent, "S", "", "")
+    task = node(proc, Task, "T", "do\n:: x = 1\nod")
+    end = node(proc, EndEvent, "E", "", "")
+    flow(proc, "F1", start, task)
+    flow(proc, "F2", task, end)
+    v = generate(bpmn)
+    assert isinstance(v.result(), Failure)
+    assert isinstance(v.errors[0], BpmnUnsupportedForCError)
 
 
 def test_result_success():
@@ -249,3 +259,236 @@ def test_generated_c_runs_in_cbmc(tmp_path):
     flow(proc, "F0", start, gw)
     flow(proc, "Fa", gw, end, "0")
     assert "VERIFICATION FAILED" in run(bpmn).stdout
+
+
+##########################
+# Parallel gateways
+##########################
+
+
+def fork_join():
+    bpmn, proc = make()
+    start = node(proc, StartEvent, "S", "", "")
+    fork = node(proc, ParallelGatewayNode, "Fork")
+    a = node(proc, Task, "A", "")
+    b = node(proc, Task, "B", "")
+    join = node(proc, ParallelGatewayNode, "Join")
+    end = node(proc, EndEvent, "E", "", "")
+    flow(proc, "F0", start, fork)
+    flow(proc, "Fa", fork, a)
+    flow(proc, "Fb", fork, b)
+    flow(proc, "Ga", a, join)
+    flow(proc, "Gb", b, join)
+    flow(proc, "H", join, end)
+    return bpmn
+
+
+def by_label(v, label):
+    return next(t for t in v.transitions if t.label == label)
+
+
+def test_fork_starts_every_branch():
+    v = generate(fork_join())
+    assert not v.errors
+    fork = by_label(v, "Fork")
+    assert fork.enable == "!ended_P1 && (tok_F0)"
+    assert fork.clear == ["tok_F0"]
+    assert fork.sets == ["tok_Fa", "tok_Fb"]
+
+
+def test_join_waits_for_every_incoming_flow():
+    join = by_label(generate(fork_join()), "Join")
+    assert join.enable == "!ended_P1 && (tok_Ga && tok_Gb)"
+    assert join.clear == ["tok_Ga", "tok_Gb"]
+    assert join.sets == ["tok_H"]
+
+
+def loop_fork():
+    bpmn, proc = make()
+    start = node(proc, StartEvent, "S", "", "")
+    fork = node(proc, ParallelGatewayNode, "Fork")
+    a = node(proc, Task, "A", "")
+    b = node(proc, Task, "B", "")
+    gw = node(proc, ExclusiveGatewayNode, "G")
+    end = node(proc, EndEvent, "E", "", "")
+    flow(proc, "F0", start, fork)
+    flow(proc, "Fa", fork, a)
+    flow(proc, "Fb", fork, b)
+    flow(proc, "Ga", a, gw)
+    flow(proc, "Fend", b, end)
+    flow(proc, "Back", gw, fork, "again")
+    flow(proc, "Out", gw, end, "!again")
+    return bpmn
+
+
+def test_fork_with_loop_back_is_enabled_by_any_incoming():
+    v = generate(loop_fork())
+    assert not v.errors
+    fork = by_label(v, "Fork")
+    assert fork.enable == "!ended_P1 && (tok_F0 || tok_Back)"
+    assert fork.clear == ["tok_F0", "tok_Back"]
+    assert fork.sets == ["tok_Fa", "tok_Fb"]
+
+
+def test_nested_parallel_gateways():
+    bpmn, proc = make()
+    start = node(proc, StartEvent, "S", "", "")
+    outer = node(proc, ParallelGatewayNode, "Outer")
+    inner = node(proc, ParallelGatewayNode, "Inner")
+    a = node(proc, Task, "A", "")
+    b = node(proc, Task, "B", "")
+    c = node(proc, Task, "C", "")
+    ijoin = node(proc, ParallelGatewayNode, "InnerJoin")
+    ojoin = node(proc, ParallelGatewayNode, "OuterJoin")
+    end = node(proc, EndEvent, "E", "", "")
+    flow(proc, "F0", start, outer)
+    flow(proc, "O1", outer, inner)
+    flow(proc, "O2", outer, c)
+    flow(proc, "I1", inner, a)
+    flow(proc, "I2", inner, b)
+    flow(proc, "J1", a, ijoin)
+    flow(proc, "J2", b, ijoin)
+    flow(proc, "K1", ijoin, ojoin)
+    flow(proc, "K2", c, ojoin)
+    flow(proc, "H", ojoin, end)
+    v = generate(bpmn)
+    assert not v.errors
+    assert by_label(v, "Outer").sets == ["tok_O1", "tok_O2"]
+    assert by_label(v, "Inner").enable == "!ended_P1 && (tok_O1)"
+    assert by_label(v, "Inner").sets == ["tok_I1", "tok_I2"]
+    assert by_label(v, "InnerJoin").enable == "!ended_P1 && (tok_J1 && tok_J2)"
+    assert by_label(v, "OuterJoin").enable == "!ended_P1 && (tok_K1 && tok_K2)"
+    assert len(v.transitions) == 9
+
+
+def test_parallel_gateway_visited_once_and_checks_occupancy():
+    v = generate(fork_join())
+    assert [t.label for t in v.transitions].count("Join") == 1
+    assert "already-occupied" in repr(v.step)
+
+
+##########################
+# Task behaviors
+##########################
+
+
+def one_task(behavior):
+    bpmn, proc = make()
+    start = node(proc, StartEvent, "S", "", "")
+    task = node(proc, Task, "T", behavior)
+    end = node(proc, EndEvent, "E", "", "")
+    flow(proc, "F1", start, task)
+    flow(proc, "F2", task, end)
+    return generate(bpmn)
+
+
+def test_assignment_then_cwp_update():
+    v = one_task("x = 1\ny = z")
+    assert not v.errors
+    assert by_label(v, "T").behavior == ["x = 1;", "y = z;", "cwp_update();"]
+    step = repr(v.step)
+    assert step.index("y = z;") < step.index("cwp_update();")
+    # behavior runs before the outgoing place is filled
+    assert step.index("cwp_update();") < step.index("tok_F2 = true;")
+
+
+def test_skip_only_behavior_still_updates_cwp():
+    assert by_label(one_task("skip"), "T").behavior == ["cwp_update();"]
+
+
+def test_assert_and_compare():
+    v = one_task("assert(sevNeed != discharge)\nx = (a == b)")
+    lines = by_label(v, "T").behavior
+    assert lines[0].startswith("__CPROVER_assert(sevNeed != discharge, ")
+    assert lines[1] == "x = (a == b);"
+    assert lines[-1] == "cwp_update();"
+
+
+def test_if_options_are_nondeterministic_choices():
+    v = one_task("if\n:: true -> terms = agreed\n:: true -> terms = failed\nfi")
+    assert not v.errors
+    text = "\n".join(by_label(v, "T").behavior)
+    assert "nondet_uint()" in text
+    assert "bpmn_if_0 < 2" in text
+    assert text.count("__CPROVER_assume((true));") == 2
+    assert "terms = agreed;" in text and "terms = failed;" in text
+    assert text.endswith("cwp_update();")
+
+
+def test_if_else_and_guard_without_arrow():
+    v = one_task(
+        "if\n:: sevNeed == discharge\n:: else ->\n  if\n  :: true -> a = 1\n"
+        "  :: true -> a = 2\n  fi\nfi"
+    )
+    assert not v.errors
+    text = "\n".join(by_label(v, "T").behavior)
+    assert "__CPROVER_assume((sevNeed == discharge));" in text
+    assert "__CPROVER_assume(!((sevNeed == discharge)));" in text
+    assert "bpmn_if_0" in text and "bpmn_if_1" in text
+
+
+def test_statement_after_if_and_semicolons():
+    v = one_task("if\n:: x > 1 -> y = 1; z = 2\nfi\nw = 3;")
+    text = by_label(v, "T").behavior
+    assert "\t\ty = 1;" in text and "\t\tz = 2;" in text
+    assert text[-2:] == ["w = 3;", "cwp_update();"]
+
+
+@pytest.mark.parametrize(
+    "behavior", ["do\n:: x = 1\nod", "goto end", "if\n:: x = 1", "fi", "printf(1)"]
+)
+def test_unsupported_behaviors(behavior):
+    v = one_task(behavior)
+    assert isinstance(v.result(), Failure)
+
+
+def c_program(v, cwp_stub=""):
+    return (
+        "#include <stdbool.h>\n"
+        f"{v.defs}\n{cwp_stub}int main(void) {{\n{v.init}\n"
+        f"for (int i = 0; i < 12 && !({v.all_ended}); i++)\n{v.step}\n"
+        f'__CPROVER_assert({v.all_ended}, "ended");\nreturn 0;\n}}\n'
+    )
+
+
+def run_cbmc(tmp_path, src):
+    path = tmp_path / "m.c"
+    path.write_text(src)
+    return subprocess.run(
+        ["cbmc", str(path), "--unwind", "13"], capture_output=True, text=True
+    ).stdout
+
+
+@pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc not installed")
+def test_behaviors_and_parallel_in_cbmc(tmp_path):
+    # x is set by one branch, y by the other, and they must both be set at the join
+    bpmn, proc = make()
+    start = node(proc, StartEvent, "S", "", "")
+    fork = node(proc, ParallelGatewayNode, "Fork")
+    a = node(proc, Task, "A", "x = 1")
+    b = node(proc, Task, "B", "if\n:: true -> y = 1\n:: true -> y = 2\nfi")
+    join = node(proc, ParallelGatewayNode, "Join")
+    end = node(proc, EndEvent, "E", "", "")
+    flow(proc, "F0", start, fork)
+    flow(proc, "Fa", fork, a)
+    flow(proc, "Fb", fork, b)
+    flow(proc, "Ga", a, join)
+    flow(proc, "Gb", b, join)
+    flow(proc, "H", join, end)
+    v = generate(bpmn)
+    stub = (
+        "int x = 0, y = 0; int updates = 0;\n"
+        "unsigned int nondet_uint(void);\n"
+        "void cwp_update(void) { updates++; }\n"
+    )
+
+    def program(check):
+        src = c_program(v, stub)
+        return src.replace(
+            "return 0;", f'__CPROVER_assert({check}, "check");\nreturn 0;'
+        )
+
+    assert "VERIFICATION SUCCESSFUL" in run_cbmc(
+        tmp_path, program("x == 1 && (y == 1 || y == 2) && updates == 2")
+    )
+    assert "VERIFICATION FAILED" in run_cbmc(tmp_path, program("y == 1"))
