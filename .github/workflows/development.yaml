@@ -1,0 +1,64 @@
+name: Development Workflow
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18.x'
+    - name: Install Pyright
+      run: npm install -g pyright
+    - name: Check Pyright version
+      run: pyright --version
+    - uses: actions/checkout@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v3
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install --editable ".[dev]"
+        python -c "import returns.contrib.mypy.returns_plugin"
+    - name: Configure pyrightconfig.json with site-packages path
+      run: |
+        SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
+        cat > pyrightconfig.json <<EOF
+        {
+          "typeCheckingMode": "strict",
+          "pythonVersion": "3.12",
+          "include": ["src"],
+          "exclude": [
+            "src/bpmncwpverify/antlr",
+            "test",
+            "**/__pycache__",
+            "**/.venv",
+            "**/.mypy_cache",
+            "**/build",
+            "**/dist"
+          ],
+          "reportUnknownArgumentType": false,
+          "extraPaths": [
+            "src",
+            "$SITE_PACKAGES"
+          ]
+        }
+        EOF
+    - name: Pre-commit
+      uses: pre-commit/action@v3.0.1
+    - name: Test pass-off
+      run: |
+        PYTHONPATH=$PYTHONPATH:$(pwd) pytest --no-header -s -v -vv

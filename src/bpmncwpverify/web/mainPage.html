@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Call Lambda Service</title>
+</head>
+
+<body>
+  <form id="lambdaForm">
+    <label for="bpmnData">Upload BPMN file:</label>
+    <input type="file" id="bpmnData" name="bpmnData" required><br><br>
+
+    <label for="cwpData">Upload CWP file:</label>
+    <input type="file" id="cwpData" name="cwpData" required><br><br>
+
+    <label for="stateData">Upload state file:</label>
+    <input type="file" id="stateData" name="stateData" required><br><br>
+
+    <button type="submit">Submit</button>
+  </form>
+
+  <div id="statusContainer" style="margin-top: 20px; font-size: 16px; color: blue;"></div>
+  <pre><code id="spinReport" hidden></code></pre>
+  <a id="promelaLink" href="promela.html" target="_blank" hidden>Promela</a>
+
+  <script>
+    function populateSpinReport(report) {
+      const container = document.getElementById('spinReport');
+      container.innerText = report;
+      container.hidden = false;
+      const promelaLink = document.getElementById("promelaLink");
+      promelaLink.hidden = false;
+    }
+
+    let spinReport = localStorage.getItem('spinReport');
+    if (spinReport) populateSpinReport(spinReport);
+
+    document.getElementById('lambdaForm').addEventListener('submit', async function (event) {
+      event.preventDefault();
+
+      const bpmnData = document.getElementById('bpmnData').files[0];
+      const cwpData = document.getElementById('cwpData').files[0];
+      const stateData = document.getElementById('stateData').files[0];
+      const statusContainer = document.getElementById('statusContainer');
+      const lambdaUrl = 'https://iatjgvm4gt75bw4qwbz7l3bihq0irdns.lambda-url.us-east-1.on.aws/';
+
+      statusContainer.textContent = 'Processing...';
+      populateSpinReport('');
+
+      const fileToString = (file) => {
+        return new Promise((resolve, reject) => {
+          if (!file) resolve(null);
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = (error) => reject(error);
+          reader.readAsText(file);
+        });
+      };
+
+      try {
+
+        const payload = {
+          state: await fileToString(stateData),
+          cwp: await fileToString(cwpData),
+          bpmn: await fileToString(bpmnData),
+        };
+
+        const response = await fetch(lambdaUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          const body = await response.json();
+          throw new Error(`HTTP error! Status: ${response.status}—${body.error}`);
+        }
+
+        const result = await response.json();
+
+        let report = result.spin_report;
+        let promela = result.promela;
+
+        populateSpinReport(report);
+
+        localStorage.setItem('spinReport', report);
+        localStorage.setItem('promela', promela);
+
+        statusContainer.innerHTML = 'Spin Report:';
+
+        const promelaLink = document.getElementById("promelaLink");
+        promelaLink.hidden = false;
+      } catch (error) {
+        console.error('Error calling Lambda:', error);
+        statusContainer.textContent = `Error: ${error.message}`;
+      }
+    });
+  </script>
+</body>
+
+</html>
