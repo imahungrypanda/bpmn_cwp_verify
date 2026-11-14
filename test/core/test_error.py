@@ -30,7 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
     BpmnUnsupportedForCError,
+    CbmcAssertionError,
     CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -173,6 +176,20 @@ test_inputs: list[tuple[Error, str]] = [
     (
         CbmcBuildError("bad type"),
         "CBMC ERROR: Could not build the C program: bad type",
+    ),
+    (
+        CbmcAssertionError(
+            [{"property": "main.assertion.1", "line": "12", "description": "bad"}]
+        ),
+        "CBMC ERROR: 1 assertion(s) failed:\n1: bad (line 12, main.assertion.1)",
+    ),
+    (
+        CbmcRunError("not found"),
+        "CBMC ERROR: Could not run CBMC: not found",
+    ),
+    (
+        CbmcUnreachableError([{"line": "7", "description": "CWP state S"}]),
+        "CBMC ERROR: 1 goal(s) can never be reached:\n1: CWP state S (line 7)",
     ),
     (
         CwpEdgeNoParentExprError(mock.Mock(attrib="edge_attrib")),
@@ -349,6 +366,9 @@ test_ids: list[str] = [
     "BpmnUnrecognizedElement",
     "BpmnUnsupportedForCError",
     "CbmcBuildError",
+    "CbmcAssertionError",
+    "CbmcRunError",
+    "CbmcUnreachableError",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
     "CwpFileStructureError",
