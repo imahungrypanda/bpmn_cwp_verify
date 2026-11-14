@@ -1,3 +1,5 @@
+import re
+
 from returns.result import Failure, Result, Success
 
 from bpmncwpverify.builder.cbmc_bound import compute_bound
@@ -12,11 +14,18 @@ from bpmncwpverify.util.stringmanager import (
     StringManager,
 )
 from bpmncwpverify.visitors.bpmn_cbmc_visitor import CbmcBpmnGenVisitor
-from bpmncwpverify.visitors.cwp_cbmc_visitor import CwpCbmcVisitor
+from bpmncwpverify.visitors.cwp_cbmc_visitor import (
+    STATE_PREFIX,
+    STATE_VAR,
+    CwpCbmcVisitor,
+)
 
 BOUND_MACRO = "BPMN_BOUND"
 PASS_VAR = "bpmn_pass"
 UNWIND_EXTRA = 1
+REACHABILITY_MACRO = "REACHABILITY"
+NON_WORD = r"\W"
+GOALS_FUNC = "reach_goals"
 
 _C_TYPES = {
     "bit": "unsigned char",
@@ -56,12 +65,44 @@ def _generate_state_c(state: State) -> Result[str, Error]:
     return Success(str(sm))
 
 
+def _generate_covers(cwp: Cwp, bpmn_visitor: CbmcBpmnGenVisitor) -> str:
+    """
+    Cover goals for the reachability run: each end event has its token, and
+    each CWP state but the start state is the current one. The start state is
+    left out because the initial values put the CWP straight into the state
+    after it, so the C never makes the start state the current one.
+    """
+    sm = StringManager()
+    sm.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    sm.write_str(f"static void {GOALS_FUNC}(void) {{", NL_SINGLE, IndentAction.INC)
+    for transition in bpmn_visitor.transitions:
+        if transition.ends_process:
+            sm.write_str(
+                f"__CPROVER_cover({transition.enable}); /* end event {transition.label} */",
+                NL_SINGLE,
+            )
+    for state in cwp.states.values():
+        if state.id != cwp.start_state.id:
+            name = f"{STATE_PREFIX}{re.sub(NON_WORD, '_', state.name)}"
+            sm.write_str(
+                f"__CPROVER_cover({STATE_VAR} == {name}); /* CWP state {state.name} */",
+                NL_SINGLE,
+            )
+    sm.write_str("}", NL_SINGLE, IndentAction.DEC)
+    sm.write_str("#endif", NL_DOUBLE)
+    return str(sm)
+
+
 def _generate_main(bpmn_visitor: CbmcBpmnGenVisitor, bound: int) -> str:
+    # One function holds the cover goals, so each is a single goal for CBMC
+    # however many passes the loop is unrolled into
+    covers = f"#ifdef {REACHABILITY_MACRO}\n{GOALS_FUNC}();\n#endif\n"
     sm = StringManager()
     sm.write_str(f"#define {BOUND_MACRO} {bound}", NL_DOUBLE)
     sm.write_str("int main(void) {", NL_SINGLE, IndentAction.INC)
     sm.write_str(bpmn_visitor.init)
     sm.write_str("cwp_init();", NL_SINGLE)
+    sm.write_str(covers)
     sm.write_str(
         f"for (unsigned int {PASS_VAR} = 0; {PASS_VAR} < {BOUND_MACRO}; {PASS_VAR}++) {{",
         NL_SINGLE,
@@ -70,6 +111,7 @@ def _generate_main(bpmn_visitor: CbmcBpmnGenVisitor, bound: int) -> str:
     sm.write_str(f"if ({bpmn_visitor.all_ended}) break;", NL_SINGLE)
     sm.write_str(bpmn_visitor.step)
     sm.write_str("cwp_update();", NL_SINGLE)
+    sm.write_str(covers)
     sm.write_str("}", NL_SINGLE, IndentAction.DEC)
     sm.write_str("return 0;", NL_SINGLE)
     sm.write_str("}", NL_SINGLE, IndentAction.DEC)
@@ -87,6 +129,7 @@ def _generate_c(state: State, cwp: Cwp, bpmn: Bpmn) -> Result[str, Error]:
     return _generate_state_c(state).map(
         lambda state_c: (
             f"{state_c}{cwp_visitor}\n{bpmn_visitor.defs}"
+            f"{_generate_covers(cwp, bpmn_visitor)}"
             f"{_generate_main(bpmn_visitor, compute_bound(bpmn))}"
         )
     )

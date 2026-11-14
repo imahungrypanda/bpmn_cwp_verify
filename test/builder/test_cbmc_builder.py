@@ -196,3 +196,16 @@ def test_missing_input_is_an_error(missing):
 def test_bound_needs_bpmn():
     assert isinstance(CbmcBuilder().bound().failure(), NotInitializedError)
     assert isinstance(CbmcBuilder().unwind().failure(), NotInitializedError)
+
+
+def test_given_simple_when_build_then_cover_goals_are_in_one_reachability_function():
+    state, cwp = _simple_state_cwp()
+    bpmn = _bpmn([("s", "s"), ("t", "t"), ("e", "e")], [("s", "t"), ("t", "e")])
+
+    c = CbmcBuilder().with_state(state).with_cwp(cwp).with_bpmn(bpmn).build().unwrap()
+
+    assert c.count("#ifdef REACHABILITY") == 3
+    assert c.count("static void reach_goals(void)") == 1
+    assert c.count("__CPROVER_cover(") == 1 + len(cwp.states) - 1
+    assert "/* end event e */" in c
+    assert f"/* CWP state {cwp.start_state.name} */" not in c

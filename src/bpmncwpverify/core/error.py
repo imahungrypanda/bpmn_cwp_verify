@@ -224,6 +224,30 @@ class CbmcBuildError(Error):
         self.message = message
 
 
+class CbmcAssertionError(Error):
+    __slots__ = ["failures"]
+
+    def __init__(self, failures: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.failures = failures
+
+
+class CbmcRunError(Error):
+    __slots__ = ["message"]
+
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self.message = message
+
+
+class CbmcUnreachableError(Error):
+    __slots__ = ["unreached"]
+
+    def __init__(self, unreached: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.unreached = unreached
+
+
 class CwpEdgeNoParentExprError(Error):
     __slots__ = ["edge"]
 
@@ -685,6 +709,20 @@ def get_error_message(error: Error) -> str:
             return f"BPMN ERROR: {element_type} '{element_id}' cannot be expressed in the generated C program"
         case CbmcBuildError(message=message):
             return f"CBMC ERROR: Could not build the C program: {message}"
+        case CbmcAssertionError(failures=failures):
+            lines = [f"CBMC ERROR: {len(failures)} assertion(s) failed:"]
+            for idx, failure in enumerate(failures):
+                lines.append(
+                    f"{idx + 1}: {failure['description']} (line {failure['line']}, {failure['property']})"
+                )
+            return "\n".join(lines)
+        case CbmcRunError(message=message):
+            return f"CBMC ERROR: Could not run CBMC: {message}"
+        case CbmcUnreachableError(unreached=unreached):
+            lines = [f"CBMC ERROR: {len(unreached)} goal(s) can never be reached:"]
+            for idx, goal in enumerate(unreached):
+                lines.append(f"{idx + 1}: {goal['description']} (line {goal['line']})")
+            return "\n".join(lines)
         case CwpEdgeNoParentExprError(edge=edge):
             return f"CWP ERROR: Expression or parent node not found in edge. Edge details: {edge.attrib}."
         case CwpEdgeNoStateError(edge=edge):
