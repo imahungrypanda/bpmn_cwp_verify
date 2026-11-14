@@ -30,6 +30,7 @@ from bpmncwpverify.core.error import (
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
     BpmnUnsupportedForCError,
+    CbmcBuildError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -168,6 +169,10 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnUnsupportedForCError("element_id", "element_type"),
         "BPMN ERROR: element_type 'element_id' cannot be expressed in the generated C program",
+    ),
+    (
+        CbmcBuildError("bad type"),
+        "CBMC ERROR: Could not build the C program: bad type",
     ),
     (
         CwpEdgeNoParentExprError(mock.Mock(attrib="edge_attrib")),
@@ -343,6 +348,7 @@ test_ids: list[str] = [
     "BpmnTaskFlowError",
     "BpmnUnrecognizedElement",
     "BpmnUnsupportedForCError",
+    "CbmcBuildError",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
     "CwpFileStructureError",

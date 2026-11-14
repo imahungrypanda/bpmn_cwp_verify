@@ -216,6 +216,14 @@ class BpmnUnsupportedForCError(Error):
         self.element_type = element_type
 
 
+class CbmcBuildError(Error):
+    __slots__ = ["message"]
+
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self.message = message
+
+
 class CwpEdgeNoParentExprError(Error):
     __slots__ = ["edge"]
 
@@ -675,6 +683,8 @@ def get_error_message(error: Error) -> str:
             return f"BPMN ERROR: Unrecognized bpmn element type in workflow: {element_name}"
         case BpmnUnsupportedForCError(element_id=element_id, element_type=element_type):
             return f"BPMN ERROR: {element_type} '{element_id}' cannot be expressed in the generated C program"
+        case CbmcBuildError(message=message):
+            return f"CBMC ERROR: Could not build the C program: {message}"
         case CwpEdgeNoParentExprError(edge=edge):
             return f"CWP ERROR: Expression or parent node not found in edge. Edge details: {edge.attrib}."
         case CwpEdgeNoStateError(edge=edge):
