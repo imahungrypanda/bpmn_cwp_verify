@@ -1,3 +1,5 @@
+import re
+
 from returns.pipeline import is_successful
 from returns.result import Failure, Result, Success
 
@@ -7,15 +9,21 @@ from bpmncwpverify.core.cwp import Cwp
 from bpmncwpverify.core.error import CbmcBuildError, Error, NotInitializedError
 from bpmncwpverify.core.state import State
 from bpmncwpverify.util.stringmanager import NL_DOUBLE, NL_SINGLE, StringManager
-from bpmncwpverify.visitors.bpmn_cbmc_visitor import CbmcBpmnVisitor
+from bpmncwpverify.visitors.bpmn_cbmc_visitor import CHOICE_VAR, CbmcBpmnVisitor
 from bpmncwpverify.visitors.cwp_cbmc_visitor import (
     CALCULATE_FUNC,
+    STATE_PREFIX,
+    STATE_VAR,
     UPDATE_FUNC,
     CwpCbmcVisitor,
 )
 
 PASS_VAR = "pass_count"
 BOUND_MACRO = "UNWINDING_BOUND"
+REACHABILITY_MACRO = "REACHABILITY"
+CWP_REACHED_PREFIX = "reached_cwp_"
+END_REACHED_PREFIX = "reached_end_"
+END_EVENT_LABEL = "end event "
 
 _C_TYPES = {
     "bit": "unsigned char",
@@ -56,11 +64,56 @@ def _generate_state_c(state: State) -> Result[str, Error]:
     return Success(str(sm))
 
 
-def _generate_main(bpmn_visitor: CbmcBpmnVisitor, bound: int) -> str:
+def _ident(name: str) -> str:
+    return re.sub(r"\W", "_", name)
+
+
+def _reachability_targets(
+    cwp: Cwp, bpmn_visitor: CbmcBpmnVisitor
+) -> list[tuple[str, str]]:
+    """
+    (flag, condition) for each end event and each CWP state but the start state.
+    The flag is set once the condition holds right after a pass. The start state
+    is left out: the initial values already put the CWP in the state after it.
+    """
+    targets: list[tuple[str, str]] = []
+    # the visitor numbers its transitions, and labels the end events' ones
+    for transition in bpmn_visitor._transitions:  # pyright: ignore[reportPrivateUsage]
+        if transition.label.startswith(END_EVENT_LABEL):
+            event_id = transition.label[len(END_EVENT_LABEL) :]
+            targets.append(
+                (
+                    f"{END_REACHED_PREFIX}{_ident(event_id)}",
+                    f"{CHOICE_VAR} == {transition.index}",
+                )
+            )
+    for state in cwp.states.values():
+        if state is not cwp.start_state:
+            targets.append(
+                (
+                    f"{CWP_REACHED_PREFIX}{_ident(state.name)}",
+                    f"{STATE_VAR} == {STATE_PREFIX}{state.name}",
+                )
+            )
+    return targets
+
+
+def _generate_main(
+    bpmn_visitor: CbmcBpmnVisitor, bound: int, targets: list[tuple[str, str]]
+) -> str:
     sm = StringManager()
     sm.write_str(f"#define {BOUND_MACRO} {bound}", NL_DOUBLE)
+    sm.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    for flag, _ in targets:
+        sm.write_str(f"bool {flag} = false;", NL_SINGLE)
+    sm.write_str("#endif", NL_DOUBLE)
     sm.write_str("int main(void) {", NL_SINGLE)
     sm.write_str(f"\t{CALCULATE_FUNC}();", NL_SINGLE)
+    sm.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    for flag, condition in targets:
+        if condition.startswith(STATE_VAR):
+            sm.write_str(f"\t{flag} = {condition};", NL_SINGLE)
+    sm.write_str("#endif", NL_SINGLE)
     sm.write_str(
         f"\tfor (int {PASS_VAR} = 0; !({bpmn_visitor.all_ended}) && "
         f"{PASS_VAR} < {BOUND_MACRO}; {PASS_VAR}++) {{",
@@ -69,7 +122,15 @@ def _generate_main(bpmn_visitor: CbmcBpmnVisitor, bound: int) -> str:
     for line in str(bpmn_visitor.step).splitlines():
         sm.write_str(f"\t\t{line}", NL_SINGLE)
     sm.write_str(f"\t\t{UPDATE_FUNC}();", NL_SINGLE)
+    sm.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    for flag, condition in targets:
+        sm.write_str(f"\t\t{flag} = {flag} || ({condition});", NL_SINGLE)
+    sm.write_str("#endif", NL_SINGLE)
     sm.write_str("\t}", NL_SINGLE)
+    sm.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    for flag, _ in targets:
+        sm.write_str(f"\t__CPROVER_cover({flag});", NL_SINGLE)
+    sm.write_str("#endif", NL_SINGLE)
     sm.write_str("\treturn 0;", NL_SINGLE)
     sm.write_str("}", NL_SINGLE)
     return str(sm)
@@ -88,8 +149,8 @@ def _generate_c(state: State, cwp: Cwp, bpmn: Bpmn) -> Result[str, Error]:
     def assemble(state_c: str, visitor: CbmcBpmnVisitor) -> Result[str, Error]:
         # The BPMN and CWP code read the state variables, so they come after them
         return Success(
-            f"{state_c}{visitor.declarations}\n{cwp_visitor}\n"
-            f"{_generate_main(visitor, bound)}"
+            f"{state_c}static void {UPDATE_FUNC}(void);\n\n{visitor.declarations}\n{cwp_visitor}\n"
+            f"{_generate_main(visitor, bound, _reachability_targets(cwp, visitor))}"
         )
 
     result: Result[str, Error] = _generate_state_c(state).bind(  # pyright: ignore[reportUnknownMemberType]
