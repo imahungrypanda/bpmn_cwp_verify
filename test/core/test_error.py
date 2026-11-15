@@ -5,6 +5,7 @@ import pytest
 from returns.maybe import Nothing, Some
 
 from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedError,
     BpmnFlowIncomingError,
     BpmnFlowNoIdError,
     BpmnFlowOutgoingError,
@@ -71,6 +72,10 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnNoElementNameError(["Event_4kd93"]),
         "Bpmn error: ['Event_4kd93'] must have a name that is different from their ID.",
+    ),
+    (
+        BpmnCbmcUnsupportedError("Gateway_1", "parallel gateways"),
+        "CBMC ERROR: Gateway_1 cannot be expressed in C: parallel gateways.",
     ),
     (
         BpmnNoSwimLaneNameError(["Proces_32kdf8"]),
@@ -314,6 +319,7 @@ test_inputs: list[tuple[Error, str]] = [
 
 test_ids: list[str] = [
     "BpmnNoElementNameError",
+    "BpmnCbmcUnsupportedError",
     "BpmnNoSwimLaneNameError",
     "BpmnFlowIncomingError",
     "BpmnFlowNoIdError",
