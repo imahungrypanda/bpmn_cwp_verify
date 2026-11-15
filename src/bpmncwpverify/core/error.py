@@ -20,6 +20,47 @@ class BpmnNoElementNameError(Error):
         self.ids = ids
 
 
+class BpmnCbmcUnsupportedError(Error):
+    __slots__ = ["element_id", "reason"]
+
+    def __init__(self, element_id: str, reason: str) -> None:
+        super().__init__()
+        self.element_id = element_id
+        self.reason = reason
+
+
+class CbmcBuildError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class CbmcAssertionError(Error):
+    __slots__ = ["failures"]
+
+    def __init__(self, failures: list[str]) -> None:
+        super().__init__()
+        self.failures = failures
+
+
+class CbmcRunError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class CbmcUnreachableError(Error):
+    __slots__ = ["unreached"]
+
+    def __init__(self, unreached: list[str]) -> None:
+        super().__init__()
+        self.unreached = unreached
+
+
 class BpmnNoSwimLaneNameError(Error):
     __slots__ = ["ids"]
 
@@ -617,6 +658,20 @@ def get_error_message(error: Error) -> str:
         case BpmnNoElementNameError(ids=ids):
             return (
                 f"Bpmn error: {ids} must have a name that is different from their ID."
+            )
+        case BpmnCbmcUnsupportedError(element_id=element_id, reason=reason):
+            return f"CBMC ERROR: {element_id} cannot be expressed in C: {reason}."
+        case CbmcBuildError(reason=reason):
+            return f"CBMC ERROR: failed to build C: {reason}."
+        case CbmcAssertionError(failures=failures):
+            return "CBMC ERROR: assertion failed: " + "; ".join(failures) + "."
+        case CbmcRunError(reason=reason):
+            return f"CBMC ERROR: failed to run CBMC: {reason}."
+        case CbmcUnreachableError(unreached=unreached):
+            return (
+                "CBMC ERROR: never reached by the workflow: "
+                + ", ".join(unreached)
+                + "."
             )
         case BpmnNoSwimLaneNameError(ids=ids):
             return f"Bpmn error: {ids} must have a swimlane with a name that is different from their ID"

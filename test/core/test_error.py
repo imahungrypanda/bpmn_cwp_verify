@@ -5,6 +5,7 @@ import pytest
 from returns.maybe import Nothing, Some
 
 from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedError,
     BpmnFlowIncomingError,
     BpmnFlowNoIdError,
     BpmnFlowOutgoingError,
@@ -29,6 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
+    CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -71,6 +76,26 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnNoElementNameError(["Event_4kd93"]),
         "Bpmn error: ['Event_4kd93'] must have a name that is different from their ID.",
+    ),
+    (
+        BpmnCbmcUnsupportedError("Gateway_1", "parallel gateways"),
+        "CBMC ERROR: Gateway_1 cannot be expressed in C: parallel gateways.",
+    ),
+    (
+        CbmcBuildError("no CWP states"),
+        "CBMC ERROR: failed to build C: no CWP states.",
+    ),
+    (
+        CbmcAssertionError(["a", "b"]),
+        "CBMC ERROR: assertion failed: a; b.",
+    ),
+    (
+        CbmcRunError("exit code 6"),
+        "CBMC ERROR: failed to run CBMC: exit code 6.",
+    ),
+    (
+        CbmcUnreachableError(["end event E", "CWP state S"]),
+        "CBMC ERROR: never reached by the workflow: end event E, CWP state S.",
     ),
     (
         BpmnNoSwimLaneNameError(["Proces_32kdf8"]),
@@ -314,6 +339,11 @@ test_inputs: list[tuple[Error, str]] = [
 
 test_ids: list[str] = [
     "BpmnNoElementNameError",
+    "BpmnCbmcUnsupportedError",
+    "CbmcBuildError",
+    "CbmcAssertionError",
+    "CbmcRunError",
+    "CbmcUnreachableError",
     "BpmnNoSwimLaneNameError",
     "BpmnFlowIncomingError",
     "BpmnFlowNoIdError",
