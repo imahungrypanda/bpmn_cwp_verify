@@ -6,7 +6,10 @@ from bpmncwpverify.core.cwp import Cwp
 from bpmncwpverify.core.error import CbmcBuildError, Error, NotInitializedError
 from bpmncwpverify.core.state import State
 from bpmncwpverify.util.stringmanager import NL_SINGLE, IndentAction, StringManager
-from bpmncwpverify.visitors.bpmn_cbmc_visitor import CbmcGenVisitor
+from bpmncwpverify.visitors.bpmn_cbmc_visitor import (
+    CHOICE_VAR,
+    CbmcGenVisitor,
+)
 from bpmncwpverify.visitors.cwp_cbmc_visitor import CwpCbmcVisitor
 
 PRELUDE_STR = (
@@ -56,11 +59,49 @@ def _generate_state_c(state: State) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def _generate_main(bpmn_visitor: CbmcGenVisitor, bound: int) -> str:
+def _cwp_covers(cwp_visitor: CwpCbmcVisitor) -> list[str]:
+    # The start state is never made the active state: the initial values put the
+    # CWP straight into the state after it, so it starts out reached
+    return [
+        f"__CPROVER_cover(cwp_state == {cwp_visitor._enum_name(state)});"  # pyright: ignore[reportPrivateUsage]
+        for state in cwp_visitor.tracked_states
+        if state is not cwp_visitor.start_state
+    ]
+
+
+def _cwp_cover_function(cwp_visitor: CwpCbmcVisitor) -> str:
+    # One function, so each state has one cover however many places call it
+    lines = ["static void cwp_cover(void) {", *_cwp_covers(cwp_visitor), "}"]
+    return "\n".join(_ifdef_reachability(lines)) + "\n\n"
+
+
+def _end_event_covers(bpmn_visitor: CbmcGenVisitor) -> list[str]:
+    return [
+        f"__CPROVER_cover({CHOICE_VAR} == {index}u); /* {t.element_id} */"
+        for index, t in enumerate(bpmn_visitor.transitions)
+        if _ends_process(t.body)
+    ]
+
+
+def _ends_process(body: list[str]) -> bool:
+    return any(line.startswith("ended_") and line.endswith(" = 1;") for line in body)
+
+
+def _ifdef_reachability(lines: list[str]) -> list[str]:
+    if not lines:
+        return []
+    return ["#ifdef REACHABILITY", *lines, "#endif"]
+
+
+def _generate_main(
+    bpmn_visitor: CbmcGenVisitor, cwp_visitor: CwpCbmcVisitor, bound: int
+) -> str:
     main = StringManager()
     main.write_str("int main(void) {", NL_SINGLE, IndentAction.INC)
     # The CWP starts in the state the initial variable values put it in
     main.write_str("cwp_calculate_state();", NL_SINGLE)
+    for line in _ifdef_reachability(["cwp_cover();"]):
+        main.write_str(line, NL_SINGLE)
     main.write_str(
         f"for (unsigned int {STEP_VAR} = 0; {STEP_VAR} < {bound}u; {STEP_VAR}++) {{",
         NL_SINGLE,
@@ -70,6 +111,8 @@ def _generate_main(bpmn_visitor: CbmcGenVisitor, bound: int) -> str:
     for line in bpmn_visitor.pass_code().splitlines():
         main.write_str(line, NL_SINGLE)
     main.write_str("cwp_update_state();", NL_SINGLE)
+    for line in _ifdef_reachability(["cwp_cover();", *_end_event_covers(bpmn_visitor)]):
+        main.write_str(line, NL_SINGLE)
     main.write_str("}", NL_SINGLE, IndentAction.DEC)
     main.write_str("return 0;", NL_SINGLE)
     main.write_str("}", NL_SINGLE, IndentAction.DEC)
@@ -88,7 +131,8 @@ def _generate_c(state: State, cwp: Cwp, bpmn: Bpmn) -> Result[CbmcProgram, Error
     def program(visitor: CbmcGenVisitor) -> CbmcProgram:
         source = (
             f"{PRELUDE_STR}\n{_generate_state_c(state)}{cwp_visitor}"
-            f"{visitor.declarations()}\n{_generate_main(visitor, bound)}"
+            f"{_cwp_cover_function(cwp_visitor)}"
+            f"{visitor.declarations()}\n{_generate_main(visitor, cwp_visitor, bound)}"
         )
         return CbmcProgram(source, bound)
 
