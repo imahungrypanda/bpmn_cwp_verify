@@ -30,7 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
     CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -319,6 +322,15 @@ test_inputs: list[tuple[Error, str]] = [
         "TYPING ERROR: something of type 'int' cannot by assigned to something of type 'enum'",
     ),
     (SubProcessRunError("proc"), "ERROR: failed to run 'proc'"),
+    (
+        CbmcAssertionError([{"description": "x > 0", "line": "12"}]),
+        "CBMC ERROR: assertion failed\n1 failure(s):\n1: x > 0 (line 12)",
+    ),
+    (
+        CbmcUnreachableError([{"kind": "CWP state", "name": "Done"}]),
+        "CBMC ERROR: the workflow never reaches\n1 item(s):\n1: CWP state Done",
+    ),
+    (CbmcRunError("boom"), "CBMC ERROR: cbmc failed to run: boom"),
     (TypingNoTypeError("a"), "TYPING ERROR: literal 'a' has an unknown type"),
 ]
 
@@ -383,6 +395,9 @@ test_ids: list[str] = [
     "StateMultipleDefinitionErrorLineColPrevLinePrevCol",
     "StateSyntaxError",
     "SubprocessRunError",
+    "CbmcAssertionError",
+    "CbmcUnreachableError",
+    "CbmcRunError",
     "TypeingAssignCompatabilityError",
     "TypingNoTypeError",
 ]
