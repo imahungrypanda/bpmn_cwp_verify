@@ -30,7 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
     CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -81,6 +84,18 @@ test_inputs: list[tuple[Error, str]] = [
     (
         CbmcBuildError("no CWP states"),
         "CBMC ERROR: failed to build C: no CWP states.",
+    ),
+    (
+        CbmcAssertionError(["a", "b"]),
+        "CBMC ERROR: assertion failed: a; b.",
+    ),
+    (
+        CbmcRunError("exit code 6"),
+        "CBMC ERROR: failed to run CBMC: exit code 6.",
+    ),
+    (
+        CbmcUnreachableError(["end event E", "CWP state S"]),
+        "CBMC ERROR: never reached by the workflow: end event E, CWP state S.",
     ),
     (
         BpmnNoSwimLaneNameError(["Proces_32kdf8"]),
@@ -326,6 +341,9 @@ test_ids: list[str] = [
     "BpmnNoElementNameError",
     "BpmnCbmcUnsupportedError",
     "CbmcBuildError",
+    "CbmcAssertionError",
+    "CbmcRunError",
+    "CbmcUnreachableError",
     "BpmnNoSwimLaneNameError",
     "BpmnFlowIncomingError",
     "BpmnFlowNoIdError",
