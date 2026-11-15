@@ -99,9 +99,10 @@ def test_one_transition_per_element():
     assert "Task_FROM_Start = 1;" in visitor.transitions[0].body
 
 
-def test_task_behavior_placeholder():
+def test_task_without_behavior_has_no_cwp_update():
     visitor = generate(linear())
-    assert "/* behavior of Task */" in visitor.transitions[1].body
+    assert not any("cwp_update" in line for line in visitor.transitions[1].body)
+    assert not any("behavior" in line for line in visitor.transitions[1].body)
 
 
 def test_end_event_ends_process():
@@ -228,16 +229,178 @@ def test_step_is_a_single_dispatch_without_loop():
     assert out.count("__CPROVER_assume(") == 4  # bound + one per transition
 
 
-def test_parallel_gateway_is_an_error():
-    s, g, e = start(), ParallelGatewayNode("PG", "PG"), end()
-    connect(s, g)
-    connect(g, e)
-    visitor = generate(make_process("P", [s, g, e]))
-    result = visitor.result()
+def pgw(id, is_fork):
+    return ParallelGatewayNode(id, id, is_fork)
+
+
+def by_label(visitor):
+    return {t.label: t for t in visitor.transitions}
+
+
+def fork_join():
+    s, f, a, b, j, e = (
+        start(),
+        pgw("F", True),
+        task("A"),
+        task("B"),
+        pgw("J", False),
+        end(),
+    )
+    connect(s, f)
+    connect(f, a)
+    connect(f, b)
+    connect(a, j)
+    connect(b, j)
+    connect(j, e)
+    return make_process("P", [s, f, a, b, j, e])
+
+
+def test_fork_starts_every_branch_and_fires_on_any_input():
+    visitor = generate(fork_join())
+    fork = by_label(visitor)["F"]
+    assert fork.enable == "(F_FROM_Start)"
+    assert "F_FROM_Start = 0;" in fork.body
+    assert "A_FROM_F = 1;" in fork.body
+    assert "B_FROM_F = 1;" in fork.body
+    assert "token_clash = A_FROM_F || B_FROM_F;" in fork.body
+
+
+def test_join_waits_for_every_input():
+    visitor = generate(fork_join())
+    join = by_label(visitor)["J"]
+    assert join.enable == "(J_FROM_A && J_FROM_B)"
+    assert "J_FROM_A = 0;" in join.body
+    assert "J_FROM_B = 0;" in join.body
+    assert "End_FROM_J = 1;" in join.body
+    assert isinstance(visitor.result(), Success)
+
+
+def loop_fork():
+    s, f, t, x, e = (
+        start(),
+        pgw("F", True),
+        task("T"),
+        ExclusiveGatewayNode("X", "X"),
+        end(),
+    )
+    side = task("Side")
+    connect(s, f)
+    connect(f, t)
+    connect(f, side)
+    connect(t, x)
+    connect(side, e)
+    connect(x, f, "n < 3")
+    connect(x, e, "n >= 3")
+    return make_process("P", [s, f, t, x, side, e])
+
+
+def test_fork_with_loop_back_fires_on_either_input():
+    visitor = generate(loop_fork())
+    fork = by_label(visitor)["F"]
+    assert fork.enable == "(F_FROM_Start || F_FROM_X)"
+    assert "F_FROM_Start = 0;" in fork.body
+    assert "F_FROM_X = 0;" in fork.body
+    assert isinstance(visitor.result(), Success)
+
+
+def test_nested_parallel_gateways():
+    s, f1, f2 = start(), pgw("F1", True), pgw("F2", True)
+    a, b, c = task("A"), task("B"), task("C")
+    j2, j1, e = pgw("J2", False), pgw("J1", False), end()
+    connect(s, f1)
+    connect(f1, f2)
+    connect(f1, c)
+    connect(f2, a)
+    connect(f2, b)
+    connect(a, j2)
+    connect(b, j2)
+    connect(j2, j1)
+    connect(c, j1)
+    connect(j1, e)
+    visitor = generate(make_process("P", [s, f1, f2, a, b, c, j2, j1, e]))
+    got = by_label(visitor)
+    assert got["F1"].enable == "(F1_FROM_Start)"
+    assert got["F2"].enable == "(F2_FROM_F1)"
+    assert got["J2"].enable == "(J2_FROM_A && J2_FROM_B)"
+    assert got["J1"].enable == "(J1_FROM_J2 && J1_FROM_C)"
+    assert "J2_FROM_A = 0;" in got["J2"].body
+    assert "J1_FROM_J2 = 1;" in got["J2"].body
+    assert labels(visitor).count("J1") == 1
+    assert isinstance(visitor.result(), Success)
+
+
+def with_behavior(behavior):
+    s, t, e = start(), Task("T", "T", behavior), end()
+    connect(s, t)
+    connect(t, e)
+    return generate(make_process("P", [s, t, e]))
+
+
+def test_behavior_assignment_then_cwp_update():
+    visitor = with_behavior("x = 1")
+    body = visitor.transitions[1].body
+    assert body[0] == "T_FROM_Start = 0;"
+    assert body[1] == "x = 1;"
+    assert body[2] == "cwp_update();"
+    assert body.index("cwp_update();") < body.index("End_FROM_T = 1;")
+
+
+def test_behavior_statements_are_split_and_skip_is_empty():
+    body = with_behavior("a = b; c = d\nskip").transitions[1].body
+    assert "a = b;" in body
+    assert "c = d;" in body
+    assert ";" in body
+    assert body.count("cwp_update();") == 1
+
+
+def test_behavior_if_compares_and_assigns():
+    visitor = with_behavior(
+        "if\n:: x == a && y != b -> x = b\n:: true -> y = a\n:: else -> skip\nfi"
+    )
+    body = "\n".join(visitor.transitions[1].body)
+    assert "unsigned int choice_1 = nondet_uint();" in body
+    assert "__CPROVER_assume(choice_1 < 3u);" in body
+    assert "__CPROVER_assume(x == a && y != b);" in body
+    assert "x = b;" in body
+    assert "__CPROVER_assume(!((x == a && y != b) || (true)));" in body
+    assert body.rstrip().endswith("cwp_update();") or "cwp_update();" in body
+    assert body.count("cwp_update();") == 1
+
+
+def test_behavior_nested_if_and_assert():
+    visitor = with_behavior(
+        "if\n:: true ->\n  if\n  :: true -> x = a\n  :: true -> x = b\n  fi\n"
+        "  assert(x != c)\n:: else -> skip\nfi"
+    )
+    body = "\n".join(visitor.transitions[1].body)
+    assert "choice_1" in body and "choice_2" in body
+    assert '__CPROVER_assert((x != c), "assert(x != c)");' in body
+    assert body.count("cwp_update();") == 1
+
+
+def test_behavior_choices_are_unique_across_tasks():
+    s, t1, t2, e = (
+        start(),
+        Task("T1", "T1", "if\n:: true -> x = a\nfi"),
+        Task("T2", "T2", "if\n:: true -> x = b\nfi"),
+        end(),
+    )
+    connect(s, t1)
+    connect(t1, t2)
+    connect(t2, e)
+    out = repr(generate(make_process("P", [s, t1, t2, e])))
+    assert "choice_1" in out and "choice_2" in out
+
+
+@pytest.mark.parametrize(
+    "behavior", ["do\n:: true -> break\nod", "if\n:: x = 1\nfi", "if\n:: true -> x = 1"]
+)
+def test_unsupported_behavior_is_an_error(behavior):
+    result = with_behavior(behavior).result()
     assert isinstance(result, Failure)
     err = result.failure()
     assert isinstance(err, BpmnCbmcUnsupportedElementError)
-    assert err.element_id == "PG"
+    assert err.element_id == "T"
 
 
 def test_boundary_event_is_an_error():
@@ -272,5 +435,64 @@ def test_generated_c_runs_in_cbmc(tmp_path):
     src.write_text(program)
     run = subprocess.run(
         ["cbmc", str(src), "--unwind", "7"], capture_output=True, text=True
+    )
+    assert "VERIFICATION SUCCESSFUL" in run.stdout, run.stdout
+
+
+@pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc not installed")
+def test_fork_join_with_behaviors_in_cbmc(tmp_path):
+    s, f, a, b, j, e = (
+        start(),
+        pgw("F", True),
+        Task("A", "A", "x = 1"),
+        Task("B", "B", "if\n:: true -> y = 1\n:: true -> y = 2\nfi"),
+        pgw("J", False),
+        end(),
+    )
+    connect(s, f)
+    connect(f, a)
+    connect(f, b)
+    connect(a, j)
+    connect(b, j)
+    connect(j, e)
+    visitor = generate(make_process("P", [s, f, a, b, j, e]))
+
+    def run(check):
+        program = (
+            "#include <stdbool.h>\nint x = 0, y = 0;\nint updates = 0;\n"
+            "static void cwp_update(void) { updates++; }\n"
+            + repr(visitor)
+            + "int main(void) {\n"
+            "  for (int i = 0; i < 7 && !("
+            + visitor.all_ended
+            + "); i++) bpmn_step();\n"
+            + check
+            + "}\n"
+        )
+        src = tmp_path / "model.c"
+        src.write_text(program)
+        return subprocess.run(
+            ["cbmc", str(src), "--unwind", "8"], capture_output=True, text=True
+        ).stdout
+
+    assert "VERIFICATION SUCCESSFUL" in run(
+        '__CPROVER_assert(P_ended && x == 1 && (y == 1 || y == 2) && updates == 2, "done");'
+    )
+    assert "VERIFICATION FAILED" in run('__CPROVER_assert(y == 1, "y is 1");')
+
+
+@pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc not installed")
+def test_fork_with_loop_back_does_not_deadlock_in_cbmc(tmp_path):
+    visitor = generate(loop_fork())
+    program = (
+        "#include <stdbool.h>\nint n = 3;\n" + repr(visitor) + "int main(void) {\n"
+        "  for (int i = 0; i < 8 && !(" + visitor.all_ended + "); i++) bpmn_step();\n"
+        '  __CPROVER_assert(P_ended, "reached the end");\n'
+        "}\n"
+    )
+    src = tmp_path / "model.c"
+    src.write_text(program)
+    run = subprocess.run(
+        ["cbmc", str(src), "--unwind", "9"], capture_output=True, text=True
     )
     assert "VERIFICATION SUCCESSFUL" in run.stdout, run.stdout
