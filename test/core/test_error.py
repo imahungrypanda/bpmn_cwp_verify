@@ -5,6 +5,7 @@ import pytest
 from returns.maybe import Nothing, Some
 
 from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedElementError,
     BpmnFlowIncomingError,
     BpmnFlowNoIdError,
     BpmnFlowOutgoingError,
@@ -68,6 +69,10 @@ from bpmncwpverify.core.error import (
 )
 
 test_inputs: list[tuple[Error, str]] = [
+    (
+        BpmnCbmcUnsupportedElementError("Gateway_1", "InclusiveGateway"),
+        "BPMN ERROR: InclusiveGateway 'Gateway_1' cannot be expressed in C for CBMC.",
+    ),
     (
         BpmnNoElementNameError(["Event_4kd93"]),
         "Bpmn error: ['Event_4kd93'] must have a name that is different from their ID.",
@@ -313,6 +318,7 @@ test_inputs: list[tuple[Error, str]] = [
 ]
 
 test_ids: list[str] = [
+    "BpmnCbmcUnsupportedElementError",
     "BpmnNoElementNameError",
     "BpmnNoSwimLaneNameError",
     "BpmnFlowIncomingError",
