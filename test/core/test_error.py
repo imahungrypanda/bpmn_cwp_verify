@@ -30,6 +30,7 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcBuildError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -76,6 +77,10 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnCbmcUnsupportedError("Gateway_1", "parallel gateways"),
         "CBMC ERROR: Gateway_1 cannot be expressed in C: parallel gateways.",
+    ),
+    (
+        CbmcBuildError("no CWP states"),
+        "CBMC ERROR: failed to build C: no CWP states.",
     ),
     (
         BpmnNoSwimLaneNameError(["Proces_32kdf8"]),
@@ -320,6 +325,7 @@ test_inputs: list[tuple[Error, str]] = [
 test_ids: list[str] = [
     "BpmnNoElementNameError",
     "BpmnCbmcUnsupportedError",
+    "CbmcBuildError",
     "BpmnNoSwimLaneNameError",
     "BpmnFlowIncomingError",
     "BpmnFlowNoIdError",
