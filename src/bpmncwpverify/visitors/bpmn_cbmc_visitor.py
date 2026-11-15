@@ -17,6 +17,7 @@ from bpmncwpverify.core.bpmn import (
 )
 from bpmncwpverify.core.error import BpmnCbmcUnsupportedError, Error
 from bpmncwpverify.util.stringmanager import IndentAction, StringManager
+from bpmncwpverify.visitors.cwp_cbmc_visitor import UPDATE_FUNC
 
 ##############
 # Constants
@@ -28,7 +29,179 @@ NL_DOUBLE = 2
 HEADER_STR = "#include <stdbool.h>\n\nint nondet_int(void);\n"
 COLLISION_FLAG = "token_collision"
 CHOICE_VAR = "transition_choice"
+BEHAVIOR_CHOICE_VAR = "behavior_choice"
 ##############
+
+_TOKEN_RE = re.compile(
+    r"""
+    (?P<nl>\n)
+  | (?P<ws>[ \t\r]+)
+  | (?P<sep>::|->|;)
+  | (?P<op>==|!=|<=|>=|&&|\|\||[-+*/%<>!=&|^~])
+  | (?P<punct>[(),\[\]])
+  | (?P<word>[A-Za-z_]\w*|\d+)
+    """,
+    re.VERBOSE,
+)
+_BINARY_OPS = {
+    *("==", "!=", "<=", ">=", "&&", "||", "-", "+", "*", "/", "%", "<", ">"),
+    *("&", "|", "^"),
+}
+
+
+class BehaviorError(Exception):
+    pass
+
+
+def _tokenize(code: str) -> list[str]:
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", code, flags=re.S)
+    tokens: list[str] = []
+    pos = 0
+    while pos < len(code):
+        m = _TOKEN_RE.match(code, pos)
+        if m is None:
+            raise BehaviorError(f"unexpected character {code[pos]!r}")
+        pos = m.end()
+        if m.lastgroup != "ws":
+            tokens.append(m.group())
+    return tokens
+
+
+class _BehaviorTranslator:
+    """
+    Translates the Promela subset task behaviors are written in into C
+    statements: assignments, `skip`, `assert(...)`, and `if :: guard -> ... fi`.
+    As in Promela, an `if` runs one of its enabled options, chosen
+    nondeterministically; `else` is enabled when no other option is, and an `if`
+    with no enabled option blocks, which here prunes the path.
+    """
+
+    def __init__(self, code: str, task_id: str, first_choice: int) -> None:
+        self._toks = _tokenize(code)
+        self._pos = 0
+        self._task = task_id
+        self.choices = first_choice
+
+    def translate(self) -> list[str]:
+        out = self._block(set())
+        if self._pos < len(self._toks):
+            raise BehaviorError(f"unexpected {self._toks[self._pos]!r}")
+        return out
+
+    def _peek(self) -> str | None:
+        return self._toks[self._pos] if self._pos < len(self._toks) else None
+
+    def _skip_separators(self) -> None:
+        while self._peek() in ("\n", ";"):
+            self._pos += 1
+
+    def _expression(self, stops: set[str]) -> str:
+        """Reads an expression up to a stop token, or the end of its statement."""
+        out: list[str] = []
+        depth = 0
+        while (tok := self._peek()) is not None:
+            if depth == 0 and (tok in stops or tok in (";", "::")):
+                break
+            if tok == "\n":
+                if depth == 0:
+                    nxt = self._pos + 1
+                    while nxt < len(self._toks) and self._toks[nxt] == "\n":
+                        nxt += 1
+                    after = self._toks[nxt] if nxt < len(self._toks) else None
+                    if (
+                        not (out and out[-1] in _BINARY_OPS)
+                        and after not in _BINARY_OPS
+                    ):
+                        break
+                self._pos += 1
+                continue
+            depth += (tok == "(") - (tok == ")")
+            if depth < 0:
+                raise BehaviorError("unbalanced parentheses")
+            out.append(tok)
+            self._pos += 1
+        if depth or not out:
+            raise BehaviorError("missing or unbalanced expression")
+        return re.sub(r"([(!]) | (\))", r"\1\2", " ".join(out))
+
+    def _block(self, stops: set[str]) -> list[str]:
+        """Statements up to (not including) a stop token."""
+        out: list[str] = []
+        while True:
+            self._skip_separators()
+            tok = self._peek()
+            if tok is None or tok in stops:
+                return out
+            out += self._statement()
+
+    def _statement(self) -> list[str]:
+        tok = self._peek()
+        assert tok is not None
+        if tok == "skip":
+            self._pos += 1
+            return []
+        if tok == "if":
+            self._pos += 1
+            return self._if()
+        if tok == "assert":
+            self._pos += 1
+            expr = self._expression(set())
+            if not (expr.startswith("(") and expr.endswith(")")):
+                raise BehaviorError("malformed assert")
+            msg = f"Behavior assertion failed in {self._task}: {expr}"
+            msg = msg.replace("\\", "\\\\").replace('"', '\\"')
+            return [f'__CPROVER_assert({expr}, "{msg}");']
+        if re.fullmatch(r"[A-Za-z_]\w*", tok) and tok not in ("fi", "do", "od"):
+            self._pos += 1
+            if self._peek() != "=":
+                raise BehaviorError(f"unsupported statement starting at {tok!r}")
+            self._pos += 1
+            return [f"{tok} = {self._expression(set())};"]
+        raise BehaviorError(f"unsupported statement starting at {tok!r}")
+
+    def _if(self) -> list[str]:
+        options: list[tuple[str | None, list[str]]] = []  # None guard is `else`
+        self._skip_separators()
+        while self._peek() == "::":
+            self._pos += 1
+            if self._peek() == "else":
+                self._pos += 1
+                guard = None
+            else:
+                guard = self._expression({"->"})
+            if self._peek() == "->":
+                self._pos += 1
+            options.append((guard, self._block({"::", "fi"})))
+            self._skip_separators()
+        if self._peek() != "fi" or not options:
+            raise BehaviorError("malformed if")
+        self._pos += 1
+
+        others = [g for g, _ in options if g is not None]
+
+        def condition(guard: str | None) -> str:
+            if guard is None:
+                return "!(" + " || ".join(f"({g})" for g in others) + ")"
+            return guard
+
+        if len(options) == 1:
+            guard, body = options[0]
+            if guard is None and not others:
+                return body
+            return [f"__CPROVER_assume({condition(guard)});"] + body
+
+        var = f"{BEHAVIOR_CHOICE_VAR}_{self.choices}"
+        self.choices += 1
+        out = ["{", f"\tint {var} = nondet_int();"]
+        out.append(f"\t__CPROVER_assume({var} >= 0 && {var} < {len(options)});")
+        for i, (guard, body) in enumerate(options):
+            keyword = "if" if i == 0 else "else if"
+            out.append(f"\t{keyword} ({var} == {i}) {{")
+            out.append(f"\t\t__CPROVER_assume({condition(guard)});")
+            out += [f"\t\t{line}" for line in body]
+            out.append("\t}")
+        out.append("}")
+        return out
 
 
 def _ident(element_id: str) -> str:
@@ -90,6 +263,7 @@ class CbmcBpmnVisitor(BpmnVisitor):
         "_process",
         "_seen",
         "_transitions",
+        "_choices",
         "_errors",
         "declarations",
         "step",
@@ -101,6 +275,7 @@ class CbmcBpmnVisitor(BpmnVisitor):
         self._process: str = ""
         self._seen: set[str] = set()
         self._transitions: list[Transition] = []
+        self._choices = 0  # nondeterministic choices made by behaviors so far
         self._errors: list[Error] = []
         self.declarations = StringManager()
         self.step = StringManager()
@@ -149,10 +324,16 @@ class CbmcBpmnVisitor(BpmnVisitor):
             self._declare(_place(f.id)) for f in element.out_flows + element.out_msgs
         ]
 
-    def _enable(self, seq: list[str], msgs: list[str], extra: str = "") -> str:
+    def _enable(
+        self,
+        seq: list[str],
+        msgs: list[str],
+        extra: str = "",
+        need_all: bool = False,
+    ) -> str:
         terms = [f"!{_ended(self._process)}"]
         if seq:
-            terms.append("(" + " || ".join(seq) + ")")
+            terms.append("(" + (" && " if need_all else " || ").join(seq) + ")")
         if msgs:
             terms.append("(" + " && ".join(msgs) + ")")
         if extra:
@@ -165,8 +346,21 @@ class CbmcBpmnVisitor(BpmnVisitor):
         )
 
     def _behavior(self, task: Task) -> list[str]:
-        """Statements for what a task does to the variables."""
-        return []
+        """
+        Statements for what a task does to the variables, ending with the CWP
+        update if there is a behavior, as the Promela back end does. The CWP
+        visitor's declarations have to come before the BPMN ones.
+        """
+        try:
+            translator = _BehaviorTranslator(task.behavior, task.id, self._choices)
+            body = translator.translate()
+        except BehaviorError as e:
+            self._unsupported(task, f"behavior: {e}")
+            return []
+        self._choices = translator.choices
+        if not task.behavior.strip():
+            return []
+        return body + [f"{UPDATE_FUNC}();"]
 
     def _put_tokens(self, places: list[str]) -> list[str]:
         """
@@ -179,7 +373,13 @@ class CbmcBpmnVisitor(BpmnVisitor):
             f"{p} = true;" for p in places
         ]
 
-    def _simple_node(self, element: Node, kind: str, end: bool = False) -> bool:
+    def _simple_node(
+        self,
+        element: Node,
+        kind: str,
+        end: bool = False,
+        need_all: bool = False,
+    ) -> bool:
         if element.id in self._seen:
             return False
         self._seen.add(element.id)
@@ -194,7 +394,9 @@ class CbmcBpmnVisitor(BpmnVisitor):
         body += self._put_tokens(self._out_places(element))
         if end:
             body.append(f"{_ended(self._process)} = true;")
-        self._add_transition(f"{kind} {element.id}", self._enable(seq, msgs), body)
+        self._add_transition(
+            f"{kind} {element.id}", self._enable(seq, msgs, need_all=need_all), body
+        )
         return True
 
     ####################
@@ -255,8 +457,13 @@ class CbmcBpmnVisitor(BpmnVisitor):
         return True
 
     def visit_parallel_gateway(self, gateway: ParallelGatewayNode) -> bool:
-        self._seen.add(gateway.id)
-        return self._unsupported(gateway, "parallel gateways")
+        # A fork starts on any incoming token, which lets a loop re-enter it. A join
+        # waits for a token on every incoming flow.
+        return self._simple_node(
+            gateway,
+            "parallel gateway",
+            need_all=not gateway.is_fork,
+        )
 
     def visit_message_flow(self, flow: MessageFlow) -> bool:
         return True
