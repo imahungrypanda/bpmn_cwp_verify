@@ -1,23 +1,33 @@
 from returns.result import Failure, Result, Success
 
 from bpmncwpverify.builder.cbmc_bound import DEFAULT_RETRIES, compute_unwinding_bound
-from bpmncwpverify.core.bpmn import Bpmn
+from bpmncwpverify.core.bpmn import Bpmn, EndEvent
 from bpmncwpverify.core.cwp import Cwp
 from bpmncwpverify.core.error import CbmcBuildError, Error, NotInitializedError
 from bpmncwpverify.core.state import State
-from bpmncwpverify.util.stringmanager import NL_SINGLE, IndentAction, StringManager
+from bpmncwpverify.util.stringmanager import (
+    NL_DOUBLE,
+    NL_SINGLE,
+    IndentAction,
+    StringManager,
+)
 from bpmncwpverify.visitors.bpmn_cbmc_visitor import (
     STEP_FUNC_NAME,
     CbmcGenVisitor,
 )
 from bpmncwpverify.visitors.cwp_cbmc_visitor import (
     INIT_FUNC,
+    STATE_VAR,
     UPDATE_FUNC,
     CwpCbmcVisitor,
 )
 
 BOUND_MACRO = "MAX_PASSES"
 PASS_VAR = "pass_count"
+REACHABILITY_MACRO = "REACHABILITY"
+COVER_END_EVENT = "end event"
+COVER_CWP_STATE = "CWP state"
+COVER_FUNC = "cover_cwp_states"
 C_TYPES = {
     "bit": "unsigned char",
     "bool": "bool",
@@ -69,12 +79,58 @@ def _generate_state_c(state: State) -> Result[str, Error]:
     return Success("\n".join(lines) + "\n\n")
 
 
+def _cover_end_events(bpmn: Bpmn, visitor: CbmcGenVisitor) -> None:
+    """
+    Adds a cover to each end event's transition, seen only when REACHABILITY is
+    defined. Each end event is a transition labeled with its id.
+    """
+    end_ids = {
+        node.id
+        for process in bpmn.processes.values()
+        for node in process.all_items().values()
+        if isinstance(node, EndEvent)
+    }
+    for transition in visitor.transitions:
+        if transition.label in end_ids:
+            transition.body.extend(
+                [
+                    f"#ifdef {REACHABILITY_MACRO}",
+                    f"__CPROVER_cover(1); /* {COVER_END_EVENT} {transition.label} */",
+                    "#endif",
+                ]
+            )
+
+
+def _generate_cover_function(cwp: Cwp, cwp_visitor: CwpCbmcVisitor) -> str:
+    """
+    A cover for each CWP state but the start state: the initial values put the
+    CWP past it, so the C never makes it the active state.
+    """
+    sm = StringManager()
+    sm.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    sm.write_str(f"static void {COVER_FUNC}(void) {{", NL_SINGLE, IndentAction.INC)
+    for cwp_state in cwp_visitor.states:
+        if cwp_state is not cwp.start_state:
+            sm.write_str(
+                f"__CPROVER_cover({STATE_VAR} == "
+                f"{CwpCbmcVisitor.state_const(cwp_state)}); "
+                f"/* {COVER_CWP_STATE} {cwp_state.name} */",
+                NL_SINGLE,
+            )
+    sm.write_str("}", NL_SINGLE, IndentAction.DEC)
+    sm.write_str("#else", NL_SINGLE)
+    sm.write_str(f"#define {COVER_FUNC}() ((void)0)", NL_SINGLE)
+    sm.write_str("#endif", NL_DOUBLE)
+    return str(sm)
+
+
 def _generate_main(state: State, bpmn_all_ended: str) -> str:
     changed = " || ".join(f"{v.id} != old_{v.id}" for v in state.vars) or "0"
     sm = StringManager()
     sm.write_str("int main(void) {", NL_SINGLE, IndentAction.INC)
     # The CWP starts in the state the initial variable values put it in
     sm.write_str(f"{INIT_FUNC}();", NL_SINGLE)
+    sm.write_str(f"{COVER_FUNC}();", NL_SINGLE)
     sm.write_str(
         f"for (unsigned int {PASS_VAR} = 0; "
         f"{PASS_VAR} < {BOUND_MACRO} && !({bpmn_all_ended}); {PASS_VAR}++) {{",
@@ -88,6 +144,7 @@ def _generate_main(state: State, bpmn_all_ended: str) -> str:
     for var in state.vars:
         sm.write_str(f"old_{var.id} = {var.id};", NL_SINGLE)
     sm.write_str("}", NL_SINGLE, IndentAction.DEC)
+    sm.write_str(f"{COVER_FUNC}();", NL_SINGLE)
     sm.write_str("}", NL_SINGLE, IndentAction.DEC)
     sm.write_str("return 0;", NL_SINGLE)
     sm.write_str("}", NL_SINGLE, IndentAction.DEC)
@@ -105,6 +162,7 @@ def _generate_c(
 
     bpmn_visitor = CbmcGenVisitor()
     bpmn.accept(bpmn_visitor)
+    _cover_end_events(bpmn, bpmn_visitor)
 
     bound = compute_unwinding_bound(bpmn, retries)
 
@@ -116,6 +174,7 @@ def _generate_c(
             f"{cwp_visitor.declarations}\n"
             f"{bpmn_c}\n"
             f"{cwp_visitor.init_function}{cwp_visitor.update_function}"
+            f"{_generate_cover_function(cwp, cwp_visitor)}"
             f"{_generate_main(state, bpmn_visitor.all_ended)}"
         )
         return CbmcOutputs(c, bound)
