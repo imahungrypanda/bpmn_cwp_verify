@@ -25,6 +25,8 @@ from bpmncwpverify.util.stringmanager import IndentAction, StringManager
 PRELUDE_STR = "#include <stdbool.h>\n\nunsigned int nondet_uint(void);\n"
 CHOICE_VAR = "transition"
 CLASH_VAR = "token_clash"
+CWP_UPDATE_CALL = "cwp_update_state();"
+_ASSIGNMENT = re.compile(r"^[\w.\[\]]+\s*=(?!=).+$")
 NL_NONE = 0
 NL_SINGLE = 1
 NL_DOUBLE = 2
@@ -42,6 +44,92 @@ def token_place(element_id: str) -> str:
 def ended_flag(process_id: str) -> str:
     """Name of the boolean that is set once a process has reached an end event."""
     return f"ended_{_ident(process_id)}"
+
+
+class BehaviorError(Exception):
+    """A task behavior uses a construct the C translation doesn't support."""
+
+
+class _BehaviorTranslator:
+    """
+    Translates a task behavior to C. A behavior is a list of assignments and
+    `if :: guard -> statements ... fi` blocks. An `if` picks nondeterministically
+    among its options and assumes the chosen guard holds, so a branch whose guard
+    is false is never explored, as in Promela where an `if` blocks until some guard
+    holds. An `else` option holds when no other guard does.
+    """
+
+    def __init__(self, code: str) -> None:
+        self._lines = [line.strip() for line in code.split("\n") if line.strip()]
+        self._pos = 0
+        self._choices = 0
+
+    def translate(self) -> list[str]:
+        out = self._statements()
+        if self._pos != len(self._lines):
+            raise BehaviorError(self._lines[self._pos])
+        return out
+
+    def _at_block_end(self) -> bool:
+        line = self._lines[self._pos]
+        return line == "fi" or line.startswith("::")
+
+    def _statements(self) -> list[str]:
+        out: list[str] = []
+        while self._pos < len(self._lines) and not self._at_block_end():
+            line = self._lines[self._pos]
+            self._pos += 1
+            if line == "if":
+                out += self._conditional()
+                continue
+            for statement in line.split(";"):
+                statement = statement.strip()
+                if not statement or statement == "skip":
+                    continue
+                if not _ASSIGNMENT.match(statement):
+                    raise BehaviorError(statement)
+                out.append(f"{statement};")
+        return out
+
+    def _conditional(self) -> list[str]:
+        options: list[tuple[str, list[str]]] = []
+        while self._pos < len(self._lines) and self._lines[self._pos].startswith("::"):
+            head = self._lines[self._pos][2:]
+            self._pos += 1
+            guard, arrow, rest = head.partition("->")
+            if not arrow or not guard.strip():
+                raise BehaviorError(head)
+            if rest.strip():
+                self._lines.insert(self._pos, rest.strip())
+            options.append((guard.strip(), self._statements()))
+        if (
+            not options
+            or self._pos >= len(self._lines)
+            or self._lines[self._pos] != "fi"
+        ):
+            raise BehaviorError("if")
+        self._pos += 1
+        var = f"choice_{self._choices}"
+        self._choices += 1
+        others = [g for g, _ in options if g != "else"]
+        out = [
+            "{",
+            f"unsigned int {var} = nondet_uint();",
+            f"__CPROVER_assume({var} < {len(options)}u);",
+        ]
+        for index, (guard, body) in enumerate(options):
+            if guard == "else":
+                guard = (
+                    "!(" + " || ".join(f"({g})" for g in others) + ")"
+                    if others
+                    else "true"
+                )
+            out.append(f"{'if' if index == 0 else 'else if'} ({var} == {index}u) {{")
+            out.append(f"__CPROVER_assume({' '.join(guard.split())});")
+            out += body
+            out.append("}")
+        out.append("}")
+        return out
 
 
 class Transition:
@@ -111,18 +199,18 @@ class CbmcGenVisitor(BpmnVisitor):
             [token_place(m.id) for m in element.in_msgs],
         )
 
-    def _enable(self, element: Node, extra: str = "") -> str:
+    def _enable(self, element: Node, extra: str = "", join: bool = False) -> str:
         """
-        The enable condition: any incoming sequence flow has a token, and every
-        incoming message has arrived. A start event with no incoming flows has its
-        own place.
+        The enable condition: any incoming sequence flow has a token (every one, for
+        a join), and every incoming message has arrived. A start event with no
+        incoming flows has its own place.
         """
         seq, msgs = self._in_places(element)
         if not (seq or msgs):
             seq = [token_place(element.id)]
         parts = [f"!{ended_flag(self._process_id)}"]
         if seq:
-            parts.append("(" + " || ".join(seq) + ")")
+            parts.append("(" + (" && " if join else " || ").join(seq) + ")")
         if msgs:
             parts.append("(" + " && ".join(msgs) + ")")
         if extra:
@@ -148,8 +236,18 @@ class CbmcGenVisitor(BpmnVisitor):
         ]
 
     def _behavior(self, task: Task) -> list[str]:
-        """Placeholder for the task's behavior."""
-        return [f"/* behavior of {task.id} */"]
+        """
+        The task's behavior in C, followed by the CWP update, as the Promela
+        visitor ends every non-empty behavior with `updateState()`.
+        """
+        if not task.behavior.strip():
+            return []
+        try:
+            code = _BehaviorTranslator(task.behavior).translate()
+        except BehaviorError:
+            self._unsupported(task.id, "behavior")
+            return []
+        return ["{"] + code + ["}", CWP_UPDATE_CALL]
 
     def _add_transition(
         self,
@@ -297,8 +395,20 @@ class CbmcGenVisitor(BpmnVisitor):
         return True
 
     def visit_parallel_gateway(self, gateway: ParallelGatewayNode) -> bool:
-        self._unsupported(gateway.id, "parallel gateway")
-        return False
+        """
+        A fork starts every outgoing branch and is enabled by any one incoming
+        flow, since a loop can come back into it. A join waits for all of them.
+        """
+        if not self._first_visit(gateway.id):
+            return False
+        self._register(gateway)
+        self._add_transition(
+            gateway,
+            self._enable(gateway, join=not gateway.is_fork),
+            [],
+            list(gateway.out_flows) + list(gateway.out_msgs),
+        )
+        return True
 
     def visit_message_flow(self, flow: MessageFlow) -> bool:
         self._declare([flow])
