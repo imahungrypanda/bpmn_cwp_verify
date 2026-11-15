@@ -199,6 +199,47 @@ class BpmnTaskFlowError(Error):
         self.task_id = task_id
 
 
+class CbmcBuildError(Error):
+    __slots__ = ["msg"]
+
+    def __init__(self, msg: str) -> None:
+        super().__init__()
+        self.msg = msg
+
+
+class CbmcAssertionError(Error):
+    __slots__ = ["failures"]
+
+    def __init__(self, failures: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.failures = failures
+
+
+class CbmcUnreachableError(Error):
+    __slots__ = ["unreachable"]
+
+    def __init__(self, unreachable: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.unreachable = unreachable
+
+
+class CbmcRunError(Error):
+    __slots__ = ["msg"]
+
+    def __init__(self, msg: str) -> None:
+        super().__init__()
+        self.msg = msg
+
+
+class BpmnCbmcUnsupportedElementError(Error):
+    __slots__ = ["element_id", "element_type"]
+
+    def __init__(self, element_id: str, element_type: str) -> None:
+        super().__init__()
+        self.element_id = element_id
+        self.element_type = element_type
+
+
 class BpmnUnrecognizedElement(Error):
     __slots__ = ["element_name"]
 
@@ -614,6 +655,33 @@ class TypingNotNonBoolError(Error):
 
 def get_error_message(error: Error) -> str:
     match error:
+        case BpmnCbmcUnsupportedElementError(
+            element_id=element_id, element_type=element_type
+        ):
+            return f"BPMN ERROR: {element_type} '{element_id}' cannot be expressed in C for CBMC."
+        case CbmcAssertionError(failures=failures):
+            return "\n".join(
+                ["CBMC ERROR: assertion failed", f"{len(failures)} failure(s):"]
+                + [
+                    f"{idx + 1}: {f['description']} (line {f['line']})"
+                    for idx, f in enumerate(failures)
+                ]
+            )
+        case CbmcUnreachableError(unreachable=unreachable):
+            return "\n".join(
+                [
+                    "CBMC ERROR: the workflow never reaches",
+                    f"{len(unreachable)} item(s):",
+                ]
+                + [
+                    f"{idx + 1}: {u['kind']} {u['name']}"
+                    for idx, u in enumerate(unreachable)
+                ]
+            )
+        case CbmcRunError(msg=msg):
+            return f"CBMC ERROR: cbmc failed to run: {msg}"
+        case CbmcBuildError(msg=msg):
+            return f"CBMC ERROR: cannot build C program: {msg}"
         case BpmnNoElementNameError(ids=ids):
             return (
                 f"Bpmn error: {ids} must have a name that is different from their ID."
