@@ -216,12 +216,36 @@ class BpmnCbmcUnsupportedElementError(Error):
         self.element_type = element_type
 
 
+class CbmcAssertionError(Error):
+    __slots__ = ["failures"]
+
+    def __init__(self, failures: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.failures = failures
+
+
 class CbmcBuildError(Error):
     __slots__ = ["reason"]
 
     def __init__(self, reason: str) -> None:
         super().__init__()
         self.reason = reason
+
+
+class CbmcRunError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class CbmcUnreachableError(Error):
+    __slots__ = ["unreachable"]
+
+    def __init__(self, unreachable: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.unreachable = unreachable
 
 
 class CwpEdgeNoParentExprError(Error):
@@ -685,6 +709,20 @@ def get_error_message(error: Error) -> str:
             element_id=element_id, element_type=element_type
         ):
             return f"BPMN ERROR: {element_type} '{element_id}' cannot be expressed in C for CBMC."
+        case CbmcAssertionError(failures=failures):
+            lines = [f"CBMC ERROR: {len(failures)} assertion(s) failed:"]
+            for idx, failure in enumerate(failures):
+                lines.append(
+                    f"{idx + 1}: {failure['description']} (line {failure['line']})"
+                )
+            return "\n".join(lines)
+        case CbmcRunError(reason=reason):
+            return f"CBMC ERROR: Could not run CBMC: {reason}."
+        case CbmcUnreachableError(unreachable=unreachable):
+            lines = [f"CBMC ERROR: {len(unreachable)} target(s) can never be reached:"]
+            for idx, target in enumerate(unreachable):
+                lines.append(f"{idx + 1}: {target['kind']} {target['name']}")
+            return "\n".join(lines)
         case CbmcBuildError(reason=reason):
             return f"CBMC ERROR: Could not build the C program: {reason}."
         case CwpEdgeNoParentExprError(edge=edge):
