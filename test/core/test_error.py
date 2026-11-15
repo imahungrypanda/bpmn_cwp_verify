@@ -5,6 +5,7 @@ import pytest
 from returns.maybe import Nothing, Some
 
 from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedElementError,
     BpmnFlowIncomingError,
     BpmnFlowNoIdError,
     BpmnFlowOutgoingError,
@@ -29,6 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
+    CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -163,6 +168,26 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnUnrecognizedElement("element_name"),
         "BPMN ERROR: Unrecognized bpmn element type in workflow: element_name",
+    ),
+    (
+        BpmnCbmcUnsupportedElementError("id", "boundary event"),
+        "BPMN ERROR: boundary event 'id' cannot be expressed in C for CBMC.",
+    ),
+    (
+        CbmcAssertionError([{"description": "desc", "line": "7"}]),
+        "CBMC ERROR: 1 assertion(s) failed:\n1: desc (line 7)",
+    ),
+    (
+        CbmcRunError("reason"),
+        "CBMC ERROR: Could not run CBMC: reason.",
+    ),
+    (
+        CbmcUnreachableError([{"kind": "CWP state", "name": "Done"}]),
+        "CBMC ERROR: 1 target(s) can never be reached:\n1: CWP state Done",
+    ),
+    (
+        CbmcBuildError("reason"),
+        "CBMC ERROR: Could not build the C program: reason.",
     ),
     (
         CwpEdgeNoParentExprError(mock.Mock(attrib="edge_attrib")),
@@ -337,6 +362,11 @@ test_ids: list[str] = [
     "BpmnStructureError",
     "BpmnTaskFlowError",
     "BpmnUnrecognizedElement",
+    "BpmnCbmcUnsupportedElementError",
+    "CbmcAssertionError",
+    "CbmcRunError",
+    "CbmcUnreachableError",
+    "CbmcBuildError",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
     "CwpFileStructureError",
