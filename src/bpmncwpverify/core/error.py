@@ -199,6 +199,14 @@ class BpmnTaskFlowError(Error):
         self.task_id = task_id
 
 
+class CbmcBuildError(Error):
+    __slots__ = ["msg"]
+
+    def __init__(self, msg: str) -> None:
+        super().__init__()
+        self.msg = msg
+
+
 class BpmnCbmcUnsupportedElementError(Error):
     __slots__ = ["element_id", "element_type"]
 
@@ -627,6 +635,8 @@ def get_error_message(error: Error) -> str:
             element_id=element_id, element_type=element_type
         ):
             return f"BPMN ERROR: {element_type} '{element_id}' cannot be expressed in C for CBMC."
+        case CbmcBuildError(msg=msg):
+            return f"CBMC ERROR: cannot build C program: {msg}"
         case BpmnNoElementNameError(ids=ids):
             return (
                 f"Bpmn error: {ids} must have a name that is different from their ID."

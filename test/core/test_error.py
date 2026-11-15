@@ -30,6 +30,7 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcBuildError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -69,6 +70,10 @@ from bpmncwpverify.core.error import (
 )
 
 test_inputs: list[tuple[Error, str]] = [
+    (
+        CbmcBuildError("no states"),
+        "CBMC ERROR: cannot build C program: no states",
+    ),
     (
         BpmnCbmcUnsupportedElementError("Gateway_1", "InclusiveGateway"),
         "BPMN ERROR: InclusiveGateway 'Gateway_1' cannot be expressed in C for CBMC.",
@@ -318,6 +323,7 @@ test_inputs: list[tuple[Error, str]] = [
 ]
 
 test_ids: list[str] = [
+    "CbmcBuildError",
     "BpmnCbmcUnsupportedElementError",
     "BpmnNoElementNameError",
     "BpmnNoSwimLaneNameError",
