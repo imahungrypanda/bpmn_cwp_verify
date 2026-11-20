@@ -1,20 +1,22 @@
 from returns.result import Failure, Result, Success
 
 from bpmncwpverify.builder.cbmc_bound import compute_bound
-from bpmncwpverify.core.bpmn import Bpmn
+from bpmncwpverify.core.bpmn import Bpmn, EndEvent
 from bpmncwpverify.core.cwp import Cwp
 from bpmncwpverify.core.error import CbmcBuildError, Error, NotInitializedError
 from bpmncwpverify.core.state import State
 from bpmncwpverify.util.stringmanager import NL_SINGLE, IndentAction, StringManager
 from bpmncwpverify.visitors.bpmn_cbmc_visitor import CbmcBpmnGenVisitor
 from bpmncwpverify.visitors.cwp_cbmc_visitor import (
+    CURRENT_STATE,
     INIT_FUNC,
-    UPDATE_FUNC,
+    STATE_PREFIX,
     CwpCbmcVisitor,
 )
 
 STEP_VAR = "step"
 BOUND_MACRO = "BOUND"
+REACHABILITY_MACRO = "REACHABILITY"
 
 _C_TYPES = {
     "bit": "unsigned char",
@@ -60,13 +62,41 @@ def _generate_state_c(state: State) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def _generate_main(bpmn_visitor: CbmcBpmnGenVisitor, bound: int) -> str:
+def _end_event_covers(bpmn: Bpmn, bpmn_visitor: CbmcBpmnGenVisitor) -> list[str]:
+    """One cover per end event: a token is waiting on its incoming place."""
+    covers: list[str] = []
+    for process in bpmn.processes.values():
+        for node in process.all_items().values():
+            if isinstance(node, EndEvent):
+                seq, msg = bpmn_visitor._in_places(node)  # pyright: ignore[reportPrivateUsage]
+                places = " || ".join(seq + msg)
+                covers.append(f"__CPROVER_cover({places}); /* end event {node.id} */")
+    return covers
+
+
+def _generate_main(
+    bpmn_visitor: CbmcBpmnGenVisitor,
+    bound: int,
+    end_covers: list[str],
+    cwp_visitor: CwpCbmcVisitor,
+) -> str:
+    # The CWP's start state is never made active in the C, so it has no cover.
+    # The initial values put the CWP in the state after it, so covers go
+    # straight after the init as well as after each pass.
+    cwp_states = [s.name for s in cwp_visitor.states if not s.init_state]
     main = StringManager()
     main.write_str("int main(void) {", NL_SINGLE, IndentAction.INC)
     main.write_str(
         "// The CWP starts in the state the initial values put it in", NL_SINGLE
     )
     main.write_str(f"{INIT_FUNC}();", NL_SINGLE)
+    main.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    for name in cwp_states:
+        main.write_str(
+            f"__CPROVER_cover({CURRENT_STATE} == {STATE_PREFIX}{name}); /* cwp state {name} */",
+            NL_SINGLE,
+        )
+    main.write_str("#endif", NL_SINGLE)
     main.write_str(
         f"for (unsigned int {STEP_VAR} = 0; {STEP_VAR} < {BOUND_MACRO}; {STEP_VAR}++) {{",
         NL_SINGLE,
@@ -74,7 +104,15 @@ def _generate_main(bpmn_visitor: CbmcBpmnGenVisitor, bound: int) -> str:
     )
     main.write_str(f"if ({bpmn_visitor.all_ended}) break;", NL_SINGLE)
     main.write_str(bpmn_visitor.pass_code, NL_SINGLE)
-    main.write_str(f"{UPDATE_FUNC}();", NL_SINGLE)
+    main.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    for name in cwp_states:
+        main.write_str(
+            f"__CPROVER_cover({CURRENT_STATE} == {STATE_PREFIX}{name}); /* cwp state {name} */",
+            NL_SINGLE,
+        )
+    for cover in end_covers:
+        main.write_str(cover, NL_SINGLE)
+    main.write_str("#endif", NL_SINGLE)
     main.write_str("}", NL_SINGLE, IndentAction.DEC)
     main.write_str("return 0;", NL_SINGLE)
     main.write_str("}", NL_SINGLE, IndentAction.DEC)
@@ -101,7 +139,7 @@ def _generate_cbmc(state: State, cwp: Cwp, bpmn: Bpmn) -> Result[CbmcProgram, Er
         f"{_generate_state_c(state)}"
         f"{cwp_visitor}"
         f"{bpmn_visitor}\n"
-        f"{_generate_main(bpmn_visitor, bound)}"
+        f"{_generate_main(bpmn_visitor, bound, _end_event_covers(bpmn, bpmn_visitor), cwp_visitor)}"
     )
     return Success(CbmcProgram(code, bound))
 

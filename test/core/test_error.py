@@ -30,7 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
     CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -169,6 +172,18 @@ test_inputs: list[tuple[Error, str]] = [
     (
         CbmcBuildError("no processes"),
         "CBMC ERROR: Could not build the C program: no processes",
+    ),
+    (
+        CbmcAssertionError([{"line": "12", "description": "token placed"}]),
+        "CBMC ERROR: Assertion failed:\n1: line 12: token placed",
+    ),
+    (
+        CbmcRunError("not found"),
+        "CBMC ERROR: Could not run CBMC: not found",
+    ),
+    (
+        CbmcUnreachableError(["cwp state A", "end event e"]),
+        "CBMC ERROR: Unreachable:\n1: cwp state A\n2: end event e",
     ),
     (
         BpmnUnrecognizedElement("element_name"),
@@ -348,6 +363,9 @@ test_ids: list[str] = [
     "BpmnTaskFlowError",
     "BpmnCbmcUnsupportedElementError",
     "CbmcBuildError",
+    "CbmcAssertionError",
+    "CbmcRunError",
+    "CbmcUnreachableError",
     "BpmnUnrecognizedElement",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
