@@ -207,6 +207,47 @@ class BpmnUnrecognizedElement(Error):
         self.element_name = element_name
 
 
+class BpmnCbmcUnsupportedElementError(Error):
+    __slots__ = ["element_id", "element_type"]
+
+    def __init__(self, element_id: str, element_type: str) -> None:
+        super().__init__()
+        self.element_id = element_id
+        self.element_type = element_type
+
+
+class CbmcBuildError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class CbmcAssertionError(Error):
+    __slots__ = ["failures"]
+
+    def __init__(self, failures: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.failures = failures
+
+
+class CbmcRunError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class CbmcUnreachableError(Error):
+    __slots__ = ["unreachable"]
+
+    def __init__(self, unreachable: list[str]) -> None:
+        super().__init__()
+        self.unreachable = unreachable
+
+
 class CwpEdgeNoParentExprError(Error):
     __slots__ = ["edge"]
 
@@ -662,6 +703,25 @@ def get_error_message(error: Error) -> str:
             return f"BPMN ERROR at node: {node_id}. {error_msg}"
         case BpmnTaskFlowError(task_id=task_id):
             return f"Task flow error: Task '{task_id}' should have at least one incoming and one outgoing flow."
+        case BpmnCbmcUnsupportedElementError(
+            element_id=element_id, element_type=element_type
+        ):
+            return f"BPMN ERROR: {element_type} '{element_id}' cannot be expressed in C for CBMC"
+        case CbmcBuildError(reason=reason):
+            return f"CBMC ERROR: Could not build the C program: {reason}"
+        case CbmcAssertionError(failures=failures):
+            lines = ["CBMC ERROR: Assertion failed:"]
+            for idx, failure in enumerate(failures):
+                lines.append(
+                    f"{idx + 1}: line {failure['line']}: {failure['description']}"
+                )
+            return "\n".join(lines)
+        case CbmcRunError(reason=reason):
+            return f"CBMC ERROR: Could not run CBMC: {reason}"
+        case CbmcUnreachableError(unreachable=unreachable):
+            return "CBMC ERROR: Unreachable:\n" + "\n".join(
+                f"{idx + 1}: {name}" for idx, name in enumerate(unreachable)
+            )
         case BpmnUnrecognizedElement(element_name=element_name):
             return f"BPMN ERROR: Unrecognized bpmn element type in workflow: {element_name}"
         case CwpEdgeNoParentExprError(edge=edge):

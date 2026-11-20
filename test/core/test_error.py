@@ -5,6 +5,7 @@ import pytest
 from returns.maybe import Nothing, Some
 
 from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedElementError,
     BpmnFlowIncomingError,
     BpmnFlowNoIdError,
     BpmnFlowOutgoingError,
@@ -29,6 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
+    CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -159,6 +164,26 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnTaskFlowError("task_id"),
         "Task flow error: Task 'task_id' should have at least one incoming and one outgoing flow.",
+    ),
+    (
+        BpmnCbmcUnsupportedElementError("gw1", "parallel gateway"),
+        "BPMN ERROR: parallel gateway 'gw1' cannot be expressed in C for CBMC",
+    ),
+    (
+        CbmcBuildError("no processes"),
+        "CBMC ERROR: Could not build the C program: no processes",
+    ),
+    (
+        CbmcAssertionError([{"line": "12", "description": "token placed"}]),
+        "CBMC ERROR: Assertion failed:\n1: line 12: token placed",
+    ),
+    (
+        CbmcRunError("not found"),
+        "CBMC ERROR: Could not run CBMC: not found",
+    ),
+    (
+        CbmcUnreachableError(["cwp state A", "end event e"]),
+        "CBMC ERROR: Unreachable:\n1: cwp state A\n2: end event e",
     ),
     (
         BpmnUnrecognizedElement("element_name"),
@@ -336,6 +361,11 @@ test_ids: list[str] = [
     "BpmnSeqFlowNoExprError",
     "BpmnStructureError",
     "BpmnTaskFlowError",
+    "BpmnCbmcUnsupportedElementError",
+    "CbmcBuildError",
+    "CbmcAssertionError",
+    "CbmcRunError",
+    "CbmcUnreachableError",
     "BpmnUnrecognizedElement",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
