@@ -14,6 +14,7 @@ from bpmncwpverify.core.bpmn import (
 )
 from bpmncwpverify.core.error import BpmnCbmcUnsupportedElementError, Error
 from bpmncwpverify.util.stringmanager import IndentAction, StringManager
+from bpmncwpverify.visitors.cwp_cbmc_visitor import UPDATE_FUNCTION
 
 ##############
 # Constants
@@ -34,6 +35,107 @@ def _place(raw_id: str) -> str:
     return f"tok_{_c_name(raw_id)}"
 
 
+# A line of generated C and what it does to the indentation after it.
+Line = tuple[str, IndentAction]
+
+_UNSUPPORTED_KEYWORDS = {"do", "od", "atomic", "d_step", "break", "goto", "printf"}
+
+
+class _BehaviorError(Exception):
+    pass
+
+
+class _BehaviorTranslator:
+    """
+    Translates a task behavior, written in the Promela subset the SPIN back end
+    accepts, into C: assignments, and `if :: guard -> ... :: else -> ... fi`
+    blocks, which may nest. An `if` picks nondeterministically among the
+    options whose guard holds, and an `else` option is only open when no other
+    guard holds. If no option is open the path is not feasible, as in Promela.
+    """
+
+    def __init__(self, text: str) -> None:
+        self._lines = [
+            part.strip()
+            for line in text.split("\n")
+            for part in line.split(";")
+            if part.strip()
+        ]
+        self._pos = 0
+        self._count = 0
+        self.out: list[Line] = []
+
+    def translate(self) -> list[Line]:
+        self._block(top=True)
+        return self.out
+
+    def _emit(self, text: str, action: IndentAction = IndentAction.NIL) -> None:
+        self.out.append((text, action))
+
+    def _statement(self, text: str) -> None:
+        if text == "skip":
+            return
+        if text.split(" ")[0] in _UNSUPPORTED_KEYWORDS or "->" in text:
+            raise _BehaviorError(text)
+        self._emit(f"{text};")
+
+    def _block(self, top: bool = False) -> None:
+        """Statements up to the `::` or `fi` that ends them."""
+        while self._pos < len(self._lines):
+            line = self._lines[self._pos]
+            if line == "fi" or line.startswith("::"):
+                if top:
+                    raise _BehaviorError(line)
+                return
+            self._pos += 1
+            if line == "if":
+                self._if()
+            else:
+                self._statement(line)
+
+    def _if(self) -> None:
+        index = self._count
+        self._count += 1
+        body: list[list[Line]] = []
+        guards: list[str] = []
+        while True:
+            if self._pos >= len(self._lines):
+                raise _BehaviorError("if without fi")
+            line = self._lines[self._pos]
+            if line == "fi":
+                self._pos += 1
+                break
+            if not line.startswith("::") or "->" not in line:
+                raise _BehaviorError(line)
+            guard, rest = line[2:].split("->", 1)
+            guards.append(guard.strip().replace("\n", " "))
+            self._pos += 1
+            saved, self.out = self.out, []
+            if rest.strip():
+                self._lines.insert(self._pos, rest.strip())
+            self._block()
+            body.append(self.out)
+            self.out = saved
+        if not guards:
+            raise _BehaviorError("empty if")
+
+        choice = f"choice{index}"
+        others = " || ".join(f"({g})" for g in guards if g != "else") or "false"
+        self._emit("{", IndentAction.INC)
+        self._emit(f"unsigned int {choice} = nondet_uint();")
+        self._emit(f"switch ({choice}) {{", IndentAction.INC)
+        for i, (guard, lines) in enumerate(zip(guards, body)):
+            self._emit(f"case {i}:", IndentAction.INC)
+            cond = f"!({others})" if guard == "else" else guard
+            self._emit(f"__CPROVER_assume({cond});")
+            self.out.extend(lines)
+            self._emit("break;", IndentAction.DEC)
+        self._emit("default:", IndentAction.INC)
+        self._emit("__CPROVER_assume(0);", IndentAction.DEC)
+        self._emit("}", IndentAction.DEC)
+        self._emit("}", IndentAction.DEC)
+
+
 def _ended(process_id: str) -> str:
     return f"ended_{_c_name(process_id)}"
 
@@ -44,7 +146,7 @@ class Transition:
     an end event, or one outgoing flow of an exclusive gateway.
     """
 
-    __slots__ = ["label", "enable", "consume", "produce", "ends"]
+    __slots__ = ["label", "enable", "consume", "produce", "ends", "behavior"]
 
     def __init__(
         self,
@@ -53,7 +155,9 @@ class Transition:
         consume: list[str],
         produce: list[str],
         ends: str = "",
+        behavior: list[Line] | None = None,
     ) -> None:
+        self.behavior = behavior or []
         self.label = label
         self.enable = enable
         self.consume = consume
@@ -115,10 +219,16 @@ class CbmcBpmnVisitor(BpmnVisitor):
             self._add_place(_place(flow.id)) for flow in node.out_flows + node.out_msgs
         ]
 
-    def _enable(self, seq: list[str], msgs: list[str], extra: str = "") -> str:
+    def _enable(
+        self,
+        seq: list[str],
+        msgs: list[str],
+        extra: str = "",
+        all_seq: bool = False,
+    ) -> str:
         parts: list[str] = []
         if seq:
-            parts.append("(" + " || ".join(seq) + ")")
+            parts.append("(" + (" && " if all_seq else " || ").join(seq) + ")")
         if msgs:
             parts.append("(" + " && ".join(msgs) + ")")
         if extra:
@@ -134,18 +244,27 @@ class CbmcBpmnVisitor(BpmnVisitor):
         extra: str = "",
         label: str = "",
         ends: bool = False,
+        all_seq: bool = False,
+        behavior: list[Line] | None = None,
     ) -> None:
         self._transitions.append(
             Transition(
                 label or node.id,
-                self._enable(seq, msgs, extra),
+                self._enable(seq, msgs, extra, all_seq),
                 seq + msgs,
                 produce,
                 _ended(self._process_id) if ends else "",
+                behavior,
             )
         )
 
-    def _visit_plain(self, node: Node, own_place: bool = False) -> None:
+    def _visit_plain(
+        self,
+        node: Node,
+        own_place: bool = False,
+        all_seq: bool = False,
+        behavior: list[Line] | None = None,
+    ) -> None:
         seq, msgs = self._consume_places(node)
         if own_place:
             seq = [self._add_place(_place(node.id), initial=True)] + seq
@@ -157,7 +276,20 @@ class CbmcBpmnVisitor(BpmnVisitor):
             msgs,
             self._produce_places(node),
             ends=isinstance(node, EndEvent),
+            all_seq=all_seq,
+            behavior=behavior,
         )
+
+    def _task_behavior(self, task: Task) -> list[Line]:
+        """The C for the task's behavior, ending with the CWP update."""
+        if not task.behavior.strip():
+            return []
+        try:
+            lines = _BehaviorTranslator(task.behavior).translate()
+        except _BehaviorError:
+            self._unsupported(task, "task behavior")
+            return []
+        return lines + [(f"{UPDATE_FUNCTION}();", IndentAction.NIL)]
 
     def _first_visit(self, node: Node) -> bool:
         if node.id in self._seen:
@@ -209,7 +341,8 @@ class CbmcBpmnVisitor(BpmnVisitor):
             sm.write_str(f"__CPROVER_assume({t.enable});", NL_SINGLE)
             for place in t.consume:
                 sm.write_str(f"{place} = 0;", NL_SINGLE)
-            sm.write_str(f"/* behavior of {t.label} */", NL_SINGLE)
+            for text, action in t.behavior:
+                sm.write_str(text, NL_SINGLE, action)
             if t.produce:
                 sm.write_str(f"occupied = {' || '.join(t.produce)};", NL_SINGLE)
             for place in t.produce:
@@ -248,7 +381,7 @@ class CbmcBpmnVisitor(BpmnVisitor):
 
     def visit_task(self, task: Task) -> bool:
         if self._first_visit(task):
-            self._visit_plain(task)
+            self._visit_plain(task, behavior=self._task_behavior(task))
             for boundary_event in task.msg_boundary_events:
                 self._unsupported(boundary_event, "boundary event")
         return True
@@ -277,7 +410,9 @@ class CbmcBpmnVisitor(BpmnVisitor):
 
     def visit_parallel_gateway(self, gateway: ParallelGatewayNode) -> bool:
         if self._first_visit(gateway):
-            self._unsupported(gateway, "parallel gateway")
+            # A fork starts when any incoming flow has a token, since a loop
+            # can come back into it; a join waits for every incoming flow.
+            self._visit_plain(gateway, all_seq=not gateway.is_fork)
         return True
 
     def visit_process(self, process: Process) -> bool:

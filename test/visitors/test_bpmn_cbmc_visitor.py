@@ -18,6 +18,7 @@ from bpmncwpverify.core.bpmn import (
 )
 from bpmncwpverify.core.error import BpmnCbmcUnsupportedElementError
 from bpmncwpverify.visitors.bpmn_cbmc_visitor import CbmcBpmnVisitor
+from bpmncwpverify.visitors.cwp_cbmc_visitor import UPDATE_FUNCTION
 
 
 def _start(id: str) -> StartEvent:
@@ -64,8 +65,8 @@ def _run(bpmn: Bpmn) -> CbmcBpmnVisitor:
 def _case(visitor: CbmcBpmnVisitor, index: int) -> str:
     step = repr(visitor.step)
     start = step.index(f"case {index}:")
-    end = step.index("break;", start)
-    return step[start:end]
+    ends = [step.find(m, start + 1) for m in ("\n\t\tcase ", "\n\t\tdefault:")]
+    return step[start : min(e for e in ends if e != -1)]
 
 
 def _linear() -> Bpmn:
@@ -210,14 +211,200 @@ def test_message_flow_needs_token_and_sets_token():
     assert "tok_m1 = 0;" in receiver
 
 
-def test_parallel_gateway_is_an_error():
-    s, p, e = _start("S"), ParallelGatewayNode("G", "G"), _end("E")
-    _flow("f1", s, p)
-    _flow("f2", p, e)
-    visitor = _run(_bpmn(("P", [s, p, e])))
+def _find(visitor: CbmcBpmnVisitor, label: str) -> str:
+    return next(
+        _case(visitor, i)
+        for i in range(visitor.transition_count)
+        if f"/* {label} */" in _case(visitor, i)
+    )
 
-    assert [type(err) for err in visitor.errors] == [BpmnCbmcUnsupportedElementError]
-    assert visitor.errors[0].element_id == "G"
+
+def _fork_join() -> Bpmn:
+    s, f, a, b, j, e = (
+        _start("S"),
+        ParallelGatewayNode("F", "F"),
+        Task("A", "A", ""),
+        Task("B", "B", ""),
+        ParallelGatewayNode("J", "J"),
+        _end("E"),
+    )
+    _flow("f0", s, f)
+    _flow("fa", f, a)
+    _flow("fb", f, b)
+    _flow("ga", a, j)
+    _flow("gb", b, j)
+    _flow("h", j, e)
+    return _bpmn(("P", [s, f, a, b, j, e]))
+
+
+def test_fork_starts_every_branch():
+    visitor = _run(_fork_join())
+
+    assert visitor.errors == []
+    case = _find(visitor, "F")
+    assert "__CPROVER_assume((tok_f0));" in case
+    assert "occupied = tok_fa || tok_fb;" in case
+    assert "tok_fa = 1;" in case and "tok_fb = 1;" in case
+
+
+def test_join_waits_for_every_incoming_flow():
+    visitor = _run(_fork_join())
+
+    case = _find(visitor, "J")
+    assert "__CPROVER_assume((tok_ga && tok_gb));" in case
+    assert "tok_ga = 0;" in case and "tok_gb = 0;" in case
+    assert "tok_h = 1;" in case
+
+
+def test_fork_with_loop_coming_back_is_enabled_by_any_incoming_flow():
+    s, f, a, b, g, e = (
+        _start("S"),
+        ParallelGatewayNode("F", "F"),
+        Task("A", "A", ""),
+        Task("B", "B", ""),
+        ExclusiveGatewayNode("G", "G"),
+        _end("E"),
+    )
+    _flow("f0", s, f)
+    _flow("fa", f, a)
+    _flow("fb", f, b)
+    _flow("ga", a, g)
+    _flow("end", b, e)
+    back = _flow("back", g, f, "x > 0")
+    back.is_leaf = True
+    _flow("out", g, e, "x <= 0")
+    visitor = _run(_bpmn(("P", [s, f, a, b, g, e])))
+
+    assert visitor.errors == []
+    case = _find(visitor, "F")
+    assert "__CPROVER_assume((tok_f0 || tok_back));" in case
+    assert "tok_f0 = 0;" in case and "tok_back = 0;" in case
+    assert "tok_fa = 1;" in case and "tok_fb = 1;" in case
+
+
+def test_nested_parallel_gateways():
+    s, f1, f2, a, b, c, j2, j1, e = (
+        _start("S"),
+        ParallelGatewayNode("F1", "F1"),
+        ParallelGatewayNode("F2", "F2"),
+        Task("A", "A", ""),
+        Task("B", "B", ""),
+        Task("C", "C", ""),
+        ParallelGatewayNode("J2", "J2"),
+        ParallelGatewayNode("J1", "J1"),
+        _end("E"),
+    )
+    _flow("s", s, f1)
+    _flow("f1a", f1, a)
+    _flow("f1f2", f1, f2)
+    _flow("f2b", f2, b)
+    _flow("f2c", f2, c)
+    _flow("bj2", b, j2)
+    _flow("cj2", c, j2)
+    _flow("j2j1", j2, j1)
+    _flow("aj1", a, j1)
+    _flow("j1e", j1, e)
+    visitor = _run(_bpmn(("P", [s, f1, f2, a, b, c, j2, j1, e])))
+
+    assert visitor.errors == []
+    assert "tok_f1a = 1;" in _find(visitor, "F1")
+    assert "tok_f1f2 = 1;" in _find(visitor, "F1")
+    assert "__CPROVER_assume((tok_f1f2));" in _find(visitor, "F2")
+    assert "__CPROVER_assume((tok_bj2 && tok_cj2));" in _find(visitor, "J2")
+    assert "__CPROVER_assume((tok_j2j1 && tok_aj1));" in _find(visitor, "J1")
+
+
+def _task_case(behavior: str) -> tuple[CbmcBpmnVisitor, str]:
+    s, t, e = _start("S"), Task("T", "T", behavior), _end("E")
+    _flow("f1", s, t)
+    _flow("f2", t, e)
+    visitor = _run(_bpmn(("P", [s, t, e])))
+    return visitor, _find(visitor, "T")
+
+
+def test_empty_behavior_does_not_update_the_cwp():
+    visitor, case = _task_case("")
+
+    assert UPDATE_FUNCTION not in case
+    assert visitor.errors == []
+
+
+def test_assignments_then_cwp_update():
+    visitor, case = _task_case("backpackOwner = sellerName\npaymentOwner = buyerName")
+
+    assert visitor.errors == []
+    first = case.index("backpackOwner = sellerName;")
+    second = case.index("paymentOwner = buyerName;")
+    update = case.index(f"{UPDATE_FUNCTION}();")
+    assert first < second < update < case.index("tok_f2 = 1;")
+    assert case.count(f"{UPDATE_FUNCTION}();") == 1
+
+
+def test_semicolons_separate_statements():
+    _, case = _task_case("x = 1; y = x + 1")
+
+    assert "x = 1;" in case and "y = x + 1;" in case
+
+
+def test_behavior_if_picks_among_enabled_options():
+    visitor, case = _task_case(
+        "if\n:: true -> terms = agreed\n:: true -> terms = failed\nfi"
+    )
+
+    assert visitor.errors == []
+    assert "unsigned int choice0 = nondet_uint();" in case
+    assert "case 0:\n" in case and "case 1:\n" in case
+    assert "__CPROVER_assume(true);" in case
+    assert "terms = agreed;" in case and "terms = failed;" in case
+    assert "__CPROVER_assume(0);" in case
+    assert case.index(f"{UPDATE_FUNCTION}();") > case.index("terms = failed;")
+
+
+def test_behavior_compares_state_variables():
+    _, case = _task_case(
+        "if\n:: x == 1 && y != 2 -> z = 3\n:: x < y || y >= 4 -> z = 4\nfi"
+    )
+
+    assert "__CPROVER_assume(x == 1 && y != 2);" in case
+    assert "__CPROVER_assume(x < y || y >= 4);" in case
+
+
+def test_behavior_else_option_only_when_no_guard_holds():
+    _, case = _task_case(
+        "if\n:: x > 0 -> z = 1\n:: x < 0 -> z = 2\n:: else -> z = 0\nfi"
+    )
+
+    assert "__CPROVER_assume(!((x > 0) || (x < 0)));" in case
+
+
+def test_behavior_option_with_several_statements_and_nesting():
+    _, case = _task_case(
+        "if\n:: a > 0 ->\nb = 1\nif\n:: b == 1 -> c = 2\n:: b != 1 -> c = 3\nfi\n"
+        ":: else -> b = 0\nfi\nd = 4"
+    )
+
+    assert "choice0" in case and "choice1" in case
+    assert case.index("b = 1;") < case.index("choice1") < case.index("c = 2;")
+    assert case.index("b = 0;") > case.index("c = 3;")
+    assert case.index("d = 4;") > case.index("b = 0;")
+    assert case.count(f"{UPDATE_FUNCTION}();") == 1
+
+
+def test_behavior_skip_emits_nothing():
+    _, case = _task_case("skip")
+
+    assert "skip" not in case
+
+
+@pytest.mark.parametrize(
+    "behavior", ["do\n:: x = 1\nod", "if\n:: x = 1\nfi", "fi", "if\n:: true -> x = 1"]
+)
+def test_unsupported_behavior_is_an_error(behavior):
+    visitor, case = _task_case(behavior)
+
+    assert len(visitor.errors) == 1
+    assert visitor.errors[0].element_id == "T"
+    assert UPDATE_FUNCTION not in case
 
 
 def test_boundary_event_is_an_error():
@@ -306,3 +493,42 @@ def test_generated_c_is_accepted_by_cbmc(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "VERIFICATION SUCCESSFUL" in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc is not installed")
+@pytest.mark.parametrize("bad", [False, True])
+def test_fork_join_with_behaviors_runs_in_cbmc(tmp_path, bad):
+    s, f, a, b, j, e = (
+        _start("S"),
+        ParallelGatewayNode("F", "F"),
+        Task("A", "A", "if\n:: true -> x = 1\n:: true -> x = 2\nfi"),
+        Task("B", "B", "y = 5"),
+        ParallelGatewayNode("J", "J"),
+        _end("E"),
+    )
+    _flow("f0", s, f)
+    _flow("fa", f, a)
+    _flow("fb", f, b)
+    _flow("ga", a, j)
+    _flow("gb", b, j)
+    # A second flow into the join's output makes tokens collide when bad.
+    _flow("h", j, e)
+    visitor = _run(_bpmn(("P", [s, f, a, b, j, e])))
+    assert visitor.errors == []
+    limit = "x == 1 || x == 2" if not bad else "x == 1"
+    program = (
+        f"{visitor.defs}\nint x = 0;\nint y = 0;\nvoid {UPDATE_FUNCTION}(void) {{}}\n\n"
+        f"int main(void) {{\n{visitor.init}"
+        f"for (int i = 0; i < 8 && !({visitor.all_ended}); i++)\n{visitor.step}"
+        f'__CPROVER_assert({visitor.all_ended}, "ended");\n'
+        f'__CPROVER_assert(y == 5 && ({limit}), "state");\nreturn 0;\n}}\n'
+    )
+    source = tmp_path / "model.c"
+    source.write_text(program)
+
+    result = subprocess.run(
+        ["cbmc", str(source), "--unwind", "9"], capture_output=True, text=True
+    )
+
+    expected = 10 if bad else 0
+    assert result.returncode == expected, result.stdout + result.stderr
