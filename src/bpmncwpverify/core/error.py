@@ -12,6 +12,15 @@ class Error:
         pass
 
 
+class BpmnCbmcUnsupportedElementError(Error):
+    __slots__ = ["element_id", "element_type"]
+
+    def __init__(self, element_id: str, element_type: str) -> None:
+        super().__init__()
+        self.element_id = element_id
+        self.element_type = element_type
+
+
 class BpmnNoElementNameError(Error):
     __slots__ = ["ids"]
 
@@ -614,6 +623,10 @@ class TypingNotNonBoolError(Error):
 
 def get_error_message(error: Error) -> str:
     match error:
+        case BpmnCbmcUnsupportedElementError(
+            element_id=element_id, element_type=element_type
+        ):
+            return f"BPMN ERROR: {element_type} '{element_id}' cannot be expressed in the C model."
         case BpmnNoElementNameError(ids=ids):
             return (
                 f"Bpmn error: {ids} must have a name that is different from their ID."
