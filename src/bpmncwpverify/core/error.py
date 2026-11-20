@@ -20,6 +20,30 @@ class CbmcBuildError(Error):
         self.reason = reason
 
 
+class CbmcAssertionError(Error):
+    __slots__ = ["failures"]
+
+    def __init__(self, failures: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.failures = failures
+
+
+class CbmcUnreachableError(Error):
+    __slots__ = ["unreached"]
+
+    def __init__(self, unreached: list[str]) -> None:
+        super().__init__()
+        self.unreached = unreached
+
+
+class CbmcRunError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
 class BpmnCbmcUnsupportedElementError(Error):
     __slots__ = ["element_id", "element_type"]
 
@@ -633,6 +657,18 @@ def get_error_message(error: Error) -> str:
     match error:
         case CbmcBuildError(reason=reason):
             return f"CBMC ERROR: cannot build the C model: {reason}"
+        case CbmcAssertionError(failures=failures):
+            return "\n".join(
+                ["CBMC ERROR: assertion failed"]
+                + [f"Line {f['line']}: {f['description']}" for f in failures]
+            )
+        case CbmcUnreachableError(unreached=unreached):
+            return "\n".join(
+                ["CBMC ERROR: the workflow never reaches"]
+                + [f"  {name}" for name in unreached]
+            )
+        case CbmcRunError(reason=reason):
+            return f"CBMC ERROR: failed to run CBMC: {reason}"
         case BpmnCbmcUnsupportedElementError(
             element_id=element_id, element_type=element_type
         ):

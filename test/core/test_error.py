@@ -30,7 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
     CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -73,6 +76,18 @@ test_inputs: list[tuple[Error, str]] = [
     (
         CbmcBuildError("no start event"),
         "CBMC ERROR: cannot build the C model: no start event",
+    ),
+    (
+        CbmcAssertionError([{"line": "12", "description": "Assert: boom"}]),
+        "CBMC ERROR: assertion failed\nLine 12: Assert: boom",
+    ),
+    (
+        CbmcUnreachableError(["end event E1", "cwp state S2"]),
+        "CBMC ERROR: the workflow never reaches\n  end event E1\n  cwp state S2",
+    ),
+    (
+        CbmcRunError("no cbmc"),
+        "CBMC ERROR: failed to run CBMC: no cbmc",
     ),
     (
         BpmnCbmcUnsupportedElementError("Gateway_1", "parallel gateway"),
@@ -324,6 +339,9 @@ test_inputs: list[tuple[Error, str]] = [
 
 test_ids: list[str] = [
     "CbmcBuildError",
+    "CbmcAssertionError",
+    "CbmcUnreachableError",
+    "CbmcRunError",
     "BpmnCbmcUnsupportedElementError",
     "BpmnNoElementNameError",
     "BpmnNoSwimLaneNameError",
