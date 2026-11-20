@@ -12,6 +12,14 @@ class Error:
         pass
 
 
+class CbmcBuildError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
 class BpmnCbmcUnsupportedElementError(Error):
     __slots__ = ["element_id", "element_type"]
 
@@ -623,6 +631,8 @@ class TypingNotNonBoolError(Error):
 
 def get_error_message(error: Error) -> str:
     match error:
+        case CbmcBuildError(reason=reason):
+            return f"CBMC ERROR: cannot build the C model: {reason}"
         case BpmnCbmcUnsupportedElementError(
             element_id=element_id, element_type=element_type
         ):

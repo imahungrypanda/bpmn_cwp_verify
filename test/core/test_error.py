@@ -30,6 +30,7 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcBuildError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -69,6 +70,10 @@ from bpmncwpverify.core.error import (
 )
 
 test_inputs: list[tuple[Error, str]] = [
+    (
+        CbmcBuildError("no start event"),
+        "CBMC ERROR: cannot build the C model: no start event",
+    ),
     (
         BpmnCbmcUnsupportedElementError("Gateway_1", "parallel gateway"),
         "BPMN ERROR: parallel gateway 'Gateway_1' cannot be expressed in the C model.",
@@ -318,6 +323,7 @@ test_inputs: list[tuple[Error, str]] = [
 ]
 
 test_ids: list[str] = [
+    "CbmcBuildError",
     "BpmnCbmcUnsupportedElementError",
     "BpmnNoElementNameError",
     "BpmnNoSwimLaneNameError",
