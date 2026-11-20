@@ -17,6 +17,7 @@ from bpmncwpverify.core.bpmn import (
 )
 from bpmncwpverify.core.error import BpmnCbmcUnsupportedElementError, Error
 from bpmncwpverify.util.stringmanager import IndentAction, StringManager
+from bpmncwpverify.visitors.cwp_cbmc_visitor import UPDATE_FUNC
 
 ##############
 # Constants
@@ -27,7 +28,14 @@ NL_SINGLE = 1
 NL_DOUBLE = 2
 OCCUPIED_VAR = "occupied"
 CHOICE_VAR = "choice"
+CWP_CHANGED_VAR = "cwp_changed"
 ##############
+
+
+def _c_expr(expr: str) -> str:
+    """Turns a Promela expression into a C expression."""
+    expr = re.sub(r"\btrue\b", "1", expr)
+    return re.sub(r"\bfalse\b", "0", expr).strip()
 
 
 def _c_name(element_id: str) -> str:
@@ -52,17 +60,17 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
     """
 
     __slots__ = [
-        "defs",
-        "places",
-        "ends",
-        "enables",
-        "transitions",
-        "errors",
         "_declared",
-        "_visited",
-        "_process_ended",
         "_end_flags",
         "_num_transitions",
+        "_process_ended",
+        "_visited",
+        "defs",
+        "enables",
+        "ends",
+        "errors",
+        "places",
+        "transitions",
     ]
 
     def __init__(self) -> None:
@@ -102,6 +110,7 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         sm.write_str("{", NL_SINGLE, IndentAction.INC)
         sm.write_str(f"unsigned int {CHOICE_VAR} = nondet_uint();", NL_SINGLE)
         sm.write_str(f"int {OCCUPIED_VAR} = 0;", NL_SINGLE)
+        sm.write_str(f"int {CWP_CHANGED_VAR} = 0;", NL_SINGLE)
         sm.write_str(f"switch ({CHOICE_VAR}) {{", NL_SINGLE)
         sm.write_str(self.transitions)
         sm.write_str("\tdefault:", NL_SINGLE)
@@ -112,6 +121,8 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
             f'__CPROVER_assert(!{OCCUPIED_VAR}, "token placed on an occupied place");',
             NL_SINGLE,
         )
+        # The CWP moves once per pass, after the transition has run
+        sm.write_str(f"if ({CWP_CHANGED_VAR}) {UPDATE_FUNC}();", NL_SINGLE)
         sm.write_str("}", NL_SINGLE, IndentAction.DEC)
         return repr(sm)
 
@@ -161,18 +172,93 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
     def _unsupported(self, element_id: str, element_type: str) -> None:
         self.errors.append(BpmnCbmcUnsupportedElementError(element_id, element_type))
 
-    def _enable_condition(self, node: Node, flow_expr: str = "") -> str:
+    def _enable_condition(
+        self, node: Node, flow_expr: str = "", all_in: bool = False
+    ) -> str:
         seq, msg = self._in_places(node)
-        parts = ["(" + " || ".join(seq) + ")"]
+        parts = ["(" + (" && " if all_in else " || ").join(seq) + ")"]
         if msg:
             parts.append("(" + " && ".join(msg) + ")")
         if flow_expr:
-            parts.append(f"({flow_expr.replace(chr(10), ' ').strip()})")
+            parts.append(f"({_c_expr(flow_expr.replace(chr(10), ' '))})")
         return " && ".join(parts)
 
     def _gen_task_behavior(self, task: Task) -> StringManager:
-        """Placeholder: task behaviors are not generated yet."""
-        return StringManager()
+        """
+        Translates the task's behavior into C. A behavior that does anything
+        also flags the CWP for an update, which the pass makes after the
+        transition runs.
+        """
+        sm = StringManager()
+        lines = [line.strip() for line in task.behavior.split("\n") if line.strip()]
+        body, _ = self._parse_block(lines, 0, task.id, [0])
+        if not body:
+            return sm
+        for line in body:
+            sm.write_str(line, NL_SINGLE)
+        sm.write_str(f"{CWP_CHANGED_VAR} = 1;", NL_SINGLE)
+        return sm
+
+    def _parse_block(
+        self, lines: list[str], pos: int, task_id: str, counter: list[int]
+    ) -> tuple[list[str], int]:
+        """
+        Translates statements until a `::` option, a `fi`, or the end. Returns
+        the C lines and the position where it stopped.
+        """
+        out: list[str] = []
+        while pos < len(lines):
+            line = lines[pos]
+            if line.startswith("::") or line == "fi":
+                break
+            pos += 1
+            if line == "if":
+                code, pos = self._parse_if(lines, pos, task_id, counter)
+                out.extend(code)
+                continue
+            for stmt in line.split(";"):
+                stmt = stmt.strip()
+                if not stmt or stmt == "skip":
+                    continue
+                if stmt.startswith("assert"):
+                    cond = _c_expr(stmt[len("assert") :])
+                    out.append(f'__CPROVER_assert({cond}, "assertion in {task_id}");')
+                else:
+                    out.append(f"{_c_expr(stmt)};")
+        return out, pos
+
+    def _parse_if(
+        self, lines: list[str], pos: int, task_id: str, counter: list[int]
+    ) -> tuple[list[str], int]:
+        """
+        Translates the options of an if, from after `if` through `fi`, into a
+        nondeterministic choice among the options whose guards hold. No option
+        enabled blocks the path, as it does in Promela.
+        """
+        options: list[tuple[str, list[str]]] = []
+        while pos < len(lines) and lines[pos] != "fi":
+            head = lines[pos][2:]
+            guard, _, rest = head.partition("->")
+            lines[pos] = rest.strip()
+            if not lines[pos]:
+                pos += 1
+            body, pos = self._parse_block(lines, pos, task_id, counter)
+            options.append((_c_expr(guard), body))
+        pos += 1  # past fi
+
+        name = f"{CHOICE_VAR}_{counter[0]}"
+        counter[0] += 1
+        out = ["{", f"\tunsigned int {name} = nondet_uint();"]
+        taken = " || ".join(f"({g})" for g, _ in options if g != "else")
+        for i, (guard, body) in enumerate(options):
+            cond = f"!({taken or 0})" if guard == "else" else guard
+            out.append(f"\t{'} else ' if i else ''}if ({name} == {i}) {{")
+            out.append(f"\t\t__CPROVER_assume({cond});")
+            out.extend(f"\t\t{b}" for b in body)
+        out.append("\t} else {")
+        out.append("\t\t__CPROVER_assume(0);")
+        out.extend(["\t}", "}"])
+        return out, pos
 
     def _gen_transition(
         self,
@@ -182,13 +268,14 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         behavior: StringManager | None = None,
         end: bool = False,
         label: str = "",
+        all_in: bool = False,
     ) -> None:
         index = self._num_transitions
         self._num_transitions += 1
 
         self.enables.write_str(f"/* {label or node.id} */", NL_SINGLE)
         self.enables.write_str(
-            f"#define ENABLED_{index} ({self._enable_condition(node, flow_expr)})",
+            f"#define ENABLED_{index} ({self._enable_condition(node, flow_expr, all_in)})",
             NL_SINGLE,
         )
 
@@ -217,7 +304,7 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
 
     def visit_start_event(self, event: StartEvent) -> bool:
         if event.id in self._visited:
-            return True
+            return False
         if not (event.in_flows or event.in_msgs):
             # The start event's own place holds the initial token
             self._declare(self._place(event.id), 1)
@@ -226,20 +313,23 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         return True
 
     def visit_end_event(self, event: EndEvent) -> bool:
-        if self._first_visit(event):
-            self._gen_transition(event, [], end=True)
+        if not self._first_visit(event):
+            return False
+        self._gen_transition(event, [], end=True)
         return True
 
     def visit_intermediate_event(self, event: IntermediateEvent) -> bool:
-        if self._first_visit(event):
-            self._gen_transition(event, self._out_places(event))
+        if not self._first_visit(event):
+            return False
+        self._gen_transition(event, self._out_places(event))
         return True
 
     def visit_task(self, task: Task) -> bool:
-        if self._first_visit(task):
-            self._gen_transition(
-                task, self._out_places(task), behavior=self._gen_task_behavior(task)
-            )
+        if not self._first_visit(task):
+            return False
+        self._gen_transition(
+            task, self._out_places(task), behavior=self._gen_task_behavior(task)
+        )
         return True
 
     def visit_boundary_event(self, boundary_event: Task.BoundaryEvent) -> bool:
@@ -248,7 +338,7 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
 
     def visit_exclusive_gateway(self, gateway: ExclusiveGatewayNode) -> bool:
         if not self._first_visit(gateway):
-            return True
+            return False
         flows = gateway.out_flows
         if len(flows) > 1 and not all(f.expression for f in flows):
             self._unsupported(
@@ -268,8 +358,16 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         return True
 
     def visit_parallel_gateway(self, gateway: ParallelGatewayNode) -> bool:
-        self._unsupported(gateway.id, "parallel gateway")
-        return False
+        if not self._first_visit(gateway):
+            return False
+        out = self._out_places(gateway)
+        if not out:
+            self._unsupported(gateway.id, "parallel gateway with no outgoing flow")
+            return True
+        # A fork starts on any incoming token (it may be where a loop comes
+        # back in); a join waits for all of them
+        self._gen_transition(gateway, out, all_in=not gateway.is_fork)
+        return True
 
     def visit_message_flow(self, flow: MessageFlow) -> bool:
         # Message flows are places, declared by the nodes at their ends
