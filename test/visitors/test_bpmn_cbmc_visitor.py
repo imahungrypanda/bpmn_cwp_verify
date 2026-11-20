@@ -14,7 +14,8 @@ from bpmncwpverify.core.bpmn import (
     Task,
 )
 from bpmncwpverify.core.error import BpmnCbmcUnsupportedElementError
-from bpmncwpverify.visitors.bpmn_cbmc_visitor import CbmcBpmnGenVisitor
+from bpmncwpverify.visitors.bpmn_cbmc_visitor import CWP_CHANGED_VAR, CbmcBpmnGenVisitor
+from bpmncwpverify.visitors.cwp_cbmc_visitor import UPDATE_FUNC
 
 
 def connect(src: Node, dst: Node, id: str, expr: str = "") -> SequenceFlow:
@@ -245,18 +246,213 @@ def test_node_reachable_twice_is_generated_once():
     assert visitor.num_transitions == 5
 
 
-def test_parallel_gateway_is_an_error():
+def enabled(visitor: CbmcBpmnGenVisitor, label: str) -> str:
+    lines = repr(visitor).splitlines()
+    return lines[lines.index(f"/* {label} */") + 1]
+
+
+def case_of(visitor: CbmcBpmnGenVisitor, label: str) -> str:
+    lines = repr(visitor.transitions).splitlines()
+    start = next(
+        i for i, ln in enumerate(lines) if ln.strip().endswith(f"/* {label} */")
+    )
+    end = next(i for i in range(start, len(lines)) if lines[i].strip() == "break;")
+    return "\n".join(lines[start : end + 1])
+
+
+def fork_join() -> CbmcBpmnGenVisitor:
+    start = StartEvent("s", "s", "", "")
+    fork = ParallelGatewayNode("fork", "fork")
+    a = Task("a", "a", "")
+    b = Task("b", "b", "")
+    join = ParallelGatewayNode("join", "join")
+    end = EndEvent("e", "e", "", "")
+    flows = [
+        connect(start, fork, "f1"),
+        connect(fork, a, "f2"),
+        connect(fork, b, "f3"),
+        connect(a, join, "f4"),
+        connect(b, join, "f5"),
+        connect(join, end, "f6"),
+    ]
+    return run(make_process("p", [start, fork, a, b, join, end], flows))
+
+
+def test_fork_starts_every_branch():
+    visitor = fork_join()
+    assert visitor.result() == Success(visitor)
+    case = case_of(visitor, "fork")
+    assert "tok_f1 = 0;" in case
+    assert "tok_f2 = 1;" in case
+    assert "tok_f3 = 1;" in case
+
+
+def test_join_waits_for_every_incoming_flow():
+    visitor = fork_join()
+    assert "(tok_f4 && tok_f5)" in enabled(visitor, "join")
+    case = case_of(visitor, "join")
+    assert "tok_f4 = 0;" in case and "tok_f5 = 0;" in case
+    assert "tok_f6 = 1;" in case
+
+
+def test_fork_with_loop_back_is_enabled_by_any_incoming_flow():
+    start = StartEvent("s", "s", "", "")
+    fork = ParallelGatewayNode("fork", "fork")
+    a = Task("a", "a", "")
+    b = Task("b", "b", "")
+    xor = ExclusiveGatewayNode("x", "x")
+    end = EndEvent("e", "e", "", "")
+    flows = [
+        connect(start, fork, "f1"),
+        connect(fork, a, "f2"),
+        connect(fork, b, "f3"),
+        connect(a, xor, "f4"),
+        connect(xor, fork, "f5", "again == 1"),
+        connect(xor, end, "f6", "again == 0"),
+    ]
+    flows.append(connect(b, end, "f7"))
+    visitor = run(make_process("p", [start, fork, a, b, xor, end], flows))
+
+    assert visitor.result() == Success(visitor)
+    assert fork.is_fork
+    assert "(tok_f1 || tok_f5)" in enabled(visitor, "fork")
+    assert "&&" not in enabled(visitor, "fork")
+
+
+def test_nested_parallel_gateways():
+    start = StartEvent("s", "s", "", "")
+    outer = ParallelGatewayNode("outer", "outer")
+    inner = ParallelGatewayNode("inner", "inner")
+    a = Task("a", "a", "")
+    b = Task("b", "b", "")
+    c = Task("c", "c", "")
+    inner_join = ParallelGatewayNode("inner_join", "inner_join")
+    outer_join = ParallelGatewayNode("outer_join", "outer_join")
+    end = EndEvent("e", "e", "", "")
+    flows = [
+        connect(start, outer, "f1"),
+        connect(outer, inner, "f2"),
+        connect(outer, c, "f3"),
+        connect(inner, a, "f4"),
+        connect(inner, b, "f5"),
+        connect(a, inner_join, "f6"),
+        connect(b, inner_join, "f7"),
+        connect(inner_join, outer_join, "f8"),
+        connect(c, outer_join, "f9"),
+        connect(outer_join, end, "f10"),
+    ]
+    visitor = run(
+        make_process(
+            "p",
+            [start, outer, inner, a, b, c, inner_join, outer_join, end],
+            flows,
+        )
+    )
+
+    assert visitor.result() == Success(visitor)
+    assert visitor.num_transitions == 9
+    text = repr(visitor)
+    assert "(tok_f6 && tok_f7)" in text
+    assert "(tok_f8 && tok_f9)" in text
+
+
+def test_parallel_gateway_without_outgoing_flow_is_an_error():
     start = StartEvent("s", "s", "", "")
     gw = ParallelGatewayNode("pg", "pg")
-    end = EndEvent("e", "e", "", "")
-    flows = [connect(start, gw, "f1"), connect(gw, end, "f2")]
-    visitor = run(make_process("p", [start, gw, end], flows))
+    visitor = run(make_process("p", [start, gw], [connect(start, gw, "f1")]))
 
     result = visitor.result()
     assert isinstance(result, Failure)
     error = result.failure()
     assert isinstance(error, BpmnCbmcUnsupportedElementError)
     assert error.element_id == "pg"
+
+
+def task_with(behavior: str) -> CbmcBpmnGenVisitor:
+    process, _, task, _ = start_task_end()
+    task.behavior = behavior
+    return run(process)
+
+
+def task_case(visitor: CbmcBpmnGenVisitor) -> str:
+    body = repr(visitor.transitions)
+    return body[body.index("case 1:") : body.index("case 2:")]
+
+
+def test_empty_behavior_does_not_update_cwp():
+    visitor = task_with("")
+    assert CWP_CHANGED_VAR + " = 1" not in task_case(visitor)
+
+
+def test_assignment_behavior():
+    case = task_case(task_with("backpackOwner = sellerName\npaymentOwner = buyerName"))
+    assert "backpackOwner = sellerName;" in case
+    assert "paymentOwner = buyerName;" in case
+    assert case.index("paymentOwner") < case.index("tok_f2 = 1;")
+
+
+def test_semicolon_and_skip():
+    case = task_case(task_with("x = 1;\nskip\ny = 2; z = 3"))
+    assert "x = 1;" in case and "y = 2;" in case and "z = 3;" in case
+    assert "skip" not in case
+
+
+def test_if_behavior_is_nondeterministic_choice_on_guards():
+    case = task_case(
+        task_with(
+            "if\n:: true -> terms = agreed\n:: terms == pending -> terms = failed\nfi"
+        )
+    )
+    assert "nondet_uint()" in case
+    assert "__CPROVER_assume(1);" in case
+    assert "__CPROVER_assume(terms == pending);" in case
+    assert "terms = agreed;" in case and "terms = failed;" in case
+    assert "for" not in case and "while" not in case
+
+
+def test_comparisons_and_else():
+    case = task_case(
+        task_with("if\n:: sevNeed == discharge -> alert = yes\n:: else -> skip\nfi")
+    )
+    assert "__CPROVER_assume(sevNeed == discharge);" in case
+    assert "__CPROVER_assume(!((sevNeed == discharge)));" in case
+    assert "alert = yes;" in case
+
+
+def test_guard_with_body_on_following_lines_and_nesting():
+    case = task_case(
+        task_with(
+            "if\n"
+            ":: a == 1 ->\n"
+            "    if\n"
+            "    :: true -> b = 1\n"
+            "    :: true -> b = 2\n"
+            "    fi\n"
+            "    c = 3\n"
+            ":: else -> d = 4\n"
+            "fi"
+        )
+    )
+    assert "b = 1;" in case and "b = 2;" in case
+    assert "c = 3;" in case and "d = 4;" in case
+    assert "choice_0" in case and "choice_1" in case
+
+
+def test_assert_in_behavior():
+    case = task_case(task_with("assert(sevNeed != expired)"))
+    assert '__CPROVER_assert((sevNeed != expired), "assertion in t");' in case
+
+
+def test_cwp_update_follows_behavior_once_per_pass():
+    visitor = task_with("x = 1")
+    case = task_case(visitor)
+    assert f"{CWP_CHANGED_VAR} = 1;" in case
+    assert case.index("x = 1;") < case.index(f"{CWP_CHANGED_VAR} = 1;")
+    assert "cwp_update" not in case
+
+    code = visitor.pass_code
+    assert code.count(f"{UPDATE_FUNC}()") == 1
+    assert code.index("switch") < code.index(f"if ({CWP_CHANGED_VAR}) {UPDATE_FUNC}();")
 
 
 def test_boundary_event_is_an_error():
