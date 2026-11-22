@@ -207,6 +207,15 @@ class BpmnUnrecognizedElement(Error):
         self.element_name = element_name
 
 
+class BpmnCbmcUnsupportedElementError(Error):
+    __slots__ = ["element_id", "element_kind"]
+
+    def __init__(self, element_id: str, element_kind: str) -> None:
+        super().__init__()
+        self.element_id = element_id
+        self.element_kind = element_kind
+
+
 class CwpEdgeNoParentExprError(Error):
     __slots__ = ["edge"]
 
@@ -664,6 +673,10 @@ def get_error_message(error: Error) -> str:
             return f"Task flow error: Task '{task_id}' should have at least one incoming and one outgoing flow."
         case BpmnUnrecognizedElement(element_name=element_name):
             return f"BPMN ERROR: Unrecognized bpmn element type in workflow: {element_name}"
+        case BpmnCbmcUnsupportedElementError(
+            element_id=element_id, element_kind=element_kind
+        ):
+            return f"BPMN ERROR: {element_kind} '{element_id}' cannot be expressed in C, so it is not supported by the CBMC back end."
         case CwpEdgeNoParentExprError(edge=edge):
             return f"CWP ERROR: Expression or parent node not found in edge. Edge details: {edge.attrib}."
         case CwpEdgeNoStateError(edge=edge):
