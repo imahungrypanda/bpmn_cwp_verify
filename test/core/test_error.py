@@ -30,7 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
     CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -173,6 +176,20 @@ test_inputs: list[tuple[Error, str]] = [
     (
         CbmcBuildError("no start event"),
         "CBMC ERROR: could not build the C program: no start event",
+    ),
+    (
+        CbmcAssertionError(
+            [{"description": "x > 0", "line": "12", "property": "main.assertion.1"}]
+        ),
+        "Assertion Error:\n1 assertion(s) failed:\n1: x > 0 (line 12, main.assertion.1)",
+    ),
+    (
+        CbmcRunError("no cbmc"),
+        "CBMC ERROR: failed to run CBMC: no cbmc",
+    ),
+    (
+        CbmcUnreachableError([{"description": "cwp_state == CWP_A", "line": "7"}]),
+        "Unreachable Error:\n1 cover(s) can never be reached by the workflow:\n1: cwp_state == CWP_A (line 7)",
     ),
     (
         CwpEdgeNoParentExprError(mock.Mock(attrib="edge_attrib")),
@@ -349,6 +366,9 @@ test_ids: list[str] = [
     "BpmnUnrecognizedElement",
     "BpmnCbmcUnsupportedElementError",
     "CbmcBuildError",
+    "CbmcAssertionError",
+    "CbmcRunError",
+    "CbmcUnreachableError",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
     "CwpFileStructureError",
