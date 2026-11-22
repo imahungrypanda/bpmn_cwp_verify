@@ -15,6 +15,7 @@ from bpmncwpverify.core.bpmn import (
 )
 from bpmncwpverify.core.error import BpmnCbmcUnsupportedElementError
 from bpmncwpverify.util.stringmanager import IndentAction, StringManager
+from bpmncwpverify.visitors.cwp_cbmc_visitor import UPDATE_FUNC
 
 ##############
 # Constants
@@ -66,6 +67,7 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         "_visited",
         "_process_id",
         "_step_built",
+        "_choice_count",
     ]
 
     def __init__(self) -> None:
@@ -79,6 +81,7 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         self._visited: set[str] = set()
         self._process_id = ""
         self._step_built = False
+        self._choice_count = 0
 
     @property
     def all_ended(self) -> str:
@@ -122,17 +125,21 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
     def _consume_places(self, node: Node) -> list[str]:
         return self._seq_in_places(node) + self._msg_in_places(node)
 
-    def _enable_expr(self, node: Node, extra: str = "") -> str:
+    def _enable_expr(
+        self, node: Node, extra: str = "", require_all: bool = False
+    ) -> str:
         """
-        Enable condition: a token on any incoming place (or the start event's
-        own place), a token on every incoming message place, and for an
-        exclusive gateway's flow, the flow's condition.
+        Enable condition: a token on any incoming place (or on every one, for a
+        join; or the start event's own place), a token on every incoming
+        message place, and for an exclusive gateway's flow, the flow's
+        condition.
         """
         parts: list[str] = []
         seq = self._seq_in_places(node)
         msgs = self._msg_in_places(node)
         if seq:
-            parts.append("(" + " || ".join(seq) + ")")
+            joiner = " && " if require_all else " || "
+            parts.append("(" + joiner.join(seq) + ")")
         if msgs:
             parts.append("(" + " && ".join(msgs) + ")")
         if not parts:
@@ -147,12 +154,91 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
 
     def _behavior(self, task: Task) -> list[str]:
         """
-        Statements for a task's behavior. A placeholder until behaviors are
-        supported.
+        Statements for a task's behavior, followed by the CWP update. The
+        behavior is Promela-style: assignments, and `if :: guard -> ... fi`
+        blocks that nondeterministically pick one option whose guard holds.
         """
-        return (
-            [f"/* behavior of {task.id} not yet generated */"] if task.behavior else []
-        )
+        lines = [
+            part.strip()
+            for line in task.behavior.split("\n")
+            for part in line.split(";")
+            if part.strip()
+        ]
+        if not lines:
+            return []
+        self._choice_count = 0
+        stmts, index = self._parse_block(task.id, lines, 0)
+        if index < len(lines):
+            raise Exception(
+                self._unsupported(task.id, f"unexpected '{lines[index]}' in behavior")
+            )
+        return ["{", *stmts, f"{UPDATE_FUNC}();", "}"]
+
+    def _parse_block(
+        self, task_id: str, lines: list[str], index: int
+    ) -> tuple[list[str], int]:
+        """Translate lines until an option (`::`), `fi`, or the end."""
+        out: list[str] = []
+        while index < len(lines):
+            line = lines[index]
+            if line == "fi" or line.startswith("::"):
+                break
+            index += 1
+            if line == "if":
+                stmts, index = self._parse_if(task_id, lines, index)
+                out += stmts
+            elif line == "skip":
+                continue
+            elif line.startswith("assert(") or line.startswith("assert "):
+                cond = line[len("assert") :].strip()
+                out.append(f'__CPROVER_assert({cond}, "behavior of {task_id}");')
+            else:
+                out.append(f"{line};")
+        return out, index
+
+    def _parse_if(
+        self, task_id: str, lines: list[str], index: int
+    ) -> tuple[list[str], int]:
+        options: list[tuple[str, list[str]]] = []
+        while index < len(lines) and lines[index].startswith("::"):
+            head = lines[index][2:]
+            index += 1
+            if "->" not in head:
+                raise Exception(
+                    self._unsupported(task_id, f"option '{head.strip()}' has no '->'")
+                )
+            guard, rest = head.split("->", 1)
+            guard = guard.strip()
+            if rest.strip():
+                # the option's first statement is on the same line
+                index -= 1
+                lines[index] = rest.strip()
+            body, index = self._parse_block(task_id, lines, index)
+            options.append((guard, body))
+        if index >= len(lines) or lines[index] != "fi" or not options:
+            raise Exception(
+                self._unsupported(task_id, "malformed if ... fi in behavior")
+            )
+        index += 1
+        return self._choose(options), index
+
+    def _choose(self, options: list[tuple[str, list[str]]]) -> list[str]:
+        name = f"choice_{self._choice_count}"
+        self._choice_count += 1
+        others = [f"({g})" for g, _ in options if g != "else"]
+        out = ["{", f"unsigned int {name} = nondet_uint();"]
+        out.append(f"__CPROVER_assume({name} < {len(options)}u);")
+        out.append(f"switch ({name}) {{")
+        for i, (guard, body) in enumerate(options):
+            cond = f"!({' || '.join(others)})" if guard == "else" else f"({guard})"
+            if guard == "else" and not others:
+                cond = "true"
+            out.append(f"case {i}:")
+            out.append(f"__CPROVER_assume({cond});")
+            out += body
+            out.append("break;")
+        out += ["}", "}"]
+        return out
 
     def _add_transition(
         self,
@@ -162,6 +248,7 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         extra_enable: str = "",
         behavior: list[str] | None = None,
         end_flag: str = "",
+        require_all: bool = False,
     ) -> None:
         body = [f"{place} = false;" for place in self._consume_places(node)]
         body += behavior or []
@@ -173,7 +260,7 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         if end_flag:
             body.append(f"{end_flag} = true;")
         self.transitions.append(
-            Transition(label, self._enable_expr(node, extra_enable), body)
+            Transition(label, self._enable_expr(node, extra_enable, require_all), body)
         )
 
     def _out_places(self, node: Node) -> list[str]:
@@ -302,9 +389,28 @@ class CbmcBpmnGenVisitor(BpmnVisitor):
         return True
 
     def visit_parallel_gateway(self, gateway: ParallelGatewayNode) -> bool:
-        raise Exception(
-            self._unsupported(gateway.id, "parallel gateways are not supported yet")
+        if not self._first_visit(gateway):
+            return False
+        if gateway.out_msgs or gateway.in_msgs:
+            raise Exception(
+                self._unsupported(
+                    gateway.id, "a gateway can't send or receive messages"
+                )
+            )
+        if not gateway.out_flows:
+            raise Exception(
+                self._unsupported(gateway.id, "a parallel gateway has no outgoing flow")
+            )
+        # A fork starts every branch and is enabled by any one incoming flow
+        # (a loop can come back into it); a join waits for all of them.
+        kind = "fork" if gateway.is_fork else "join"
+        self._add_transition(
+            gateway,
+            f"parallel gateway {gateway.id} ({kind})",
+            self._out_places(gateway),
+            require_all=not gateway.is_fork,
         )
+        return True
 
     def visit_message_flow(self, flow: MessageFlow) -> bool:
         # Message places are created from the nodes at either end of the flow.

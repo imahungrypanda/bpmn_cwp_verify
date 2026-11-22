@@ -28,6 +28,14 @@ class BpmnNoSwimLaneNameError(Error):
         self.ids = ids
 
 
+class CbmcBuildError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
 class BpmnCbmcUnsupportedElementError(Error):
     __slots__ = ["element_id", "reason"]
 
@@ -629,6 +637,8 @@ def get_error_message(error: Error) -> str:
             )
         case BpmnNoSwimLaneNameError(ids=ids):
             return f"Bpmn error: {ids} must have a swimlane with a name that is different from their ID"
+        case CbmcBuildError(reason=reason):
+            return f"CBMC ERROR: Could not build the C program: {reason}."
         case BpmnCbmcUnsupportedElementError(element_id=element_id, reason=reason):
             return f"BPMN CBMC ERROR: Element '{element_id}' can't be expressed in C: {reason}."
         case BpmnFlowIncomingError(node_id=node_id):
