@@ -163,9 +163,9 @@ def test_cwp_starts_in_initial_state(tmp_path, state, cwp):
     code = build(state, cwp, linear_bpmn()).unwrap()
     code = code.replace(f"{UPDATE_FUNC}();\n", "", 1)
     code = code.replace(
-        "while (!bpmn_all_processes_done())",
+        "unsigned int passes = 0;",
         '__CPROVER_assert(cwp_state == CWP_STATE_Start, "start state");\n'
-        "\twhile (!bpmn_all_processes_done())",
+        "\tunsigned int passes = 0;",
         1,
     )
     result = compile_c(tmp_path, code)

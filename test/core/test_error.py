@@ -30,7 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
     CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -169,6 +172,18 @@ test_inputs: list[tuple[Error, str]] = [
     (
         CbmcBuildError("no C type"),
         "CBMC ERROR: Could not build the C program: no C type",
+    ),
+    (
+        CbmcAssertionError([{"description": "boom", "line": "12"}]),
+        "CBMC ERROR: Assertion failed: boom (line 12)",
+    ),
+    (
+        CbmcRunError("parse error"),
+        "CBMC ERROR: CBMC could not be run: parse error",
+    ),
+    (
+        CbmcUnreachableError([{"description": "CWP state 'A'"}]),
+        "CBMC ERROR: The workflow never reaches: CWP state 'A'",
     ),
     (
         BpmnUnrecognizedElement("element_name"),
@@ -348,6 +363,9 @@ test_ids: list[str] = [
     "BpmnTaskFlowError",
     "BpmnCbmcUnsupportedElementError",
     "CbmcBuildError",
+    "CbmcAssertionError",
+    "CbmcRunError",
+    "CbmcUnreachableError",
     "BpmnUnrecognizedElement",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
