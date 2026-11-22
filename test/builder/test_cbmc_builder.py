@@ -270,3 +270,35 @@ def test_face2face_builds(name):
     program = result.unwrap()
     assert program.bound == 25
     assert "cwp_calculate_state();" in program.c_code
+
+
+def test_given_face2face_when_build_then_reachability_covers_present():
+    from returns.unsafe import unsafe_perform_io
+
+    from bpmncwpverify.builder.cbmc_builder import CbmcBuilder
+    from bpmncwpverify.core.accessmethods import bpmnmethods
+    from bpmncwpverify.core.accessmethods.cwpmethods import CwpXmlParser
+    from bpmncwpverify.core.state import State
+    from bpmncwpverify.util.file import element_tree_from_string
+
+    base = "./test/resources/face2face/"
+
+    def read(name):
+        with open(base + name) as f:
+            return f.read()
+
+    def xml(name):
+        return unsafe_perform_io(element_tree_from_string(read(name)).unwrap())
+
+    state = State.from_str(read("state.txt")).unwrap()
+    cwp = CwpXmlParser.from_xml(xml("cwp.xml"), state).unwrap()
+    bpmn = bpmnmethods.from_xml(xml("workflow.bpmn"), state).unwrap()
+
+    c_code = (
+        CbmcBuilder().with_state(state).with_cwp(cwp).with_bpmn(bpmn).build().unwrap()
+    )
+
+    assert c_code.count("#ifdef REACHABILITY") == c_code.count("#endif")
+    assert c_code.count("/* BPMN end event ") == 2
+    assert c_code.count("/* CWP state ") == len(cwp.states) - 1
+    assert f"/* CWP state {cwp.start_state.name} */" not in c_code
