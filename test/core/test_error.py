@@ -30,7 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
     CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -169,6 +172,18 @@ test_inputs: list[tuple[Error, str]] = [
     (
         CbmcBuildError("reason"),
         "CBMC ERROR: Could not build the C program. reason",
+    ),
+    (
+        CbmcAssertionError([{"description": "bad", "line": "7"}]),
+        "CBMC ASSERTION ERROR: 1 assertion(s) failed:\n1: bad (line 7)",
+    ),
+    (
+        CbmcRunError("no cbmc"),
+        "CBMC ERROR: Could not run CBMC. no cbmc",
+    ),
+    (
+        CbmcUnreachableError(["CWP state A", "end event B"]),
+        "CBMC REACHABILITY ERROR: 2 unreachable:\n1: CWP state A\n2: end event B",
     ),
     (
         BpmnUnrecognizedElement("element_name"),
@@ -348,6 +363,9 @@ test_ids: list[str] = [
     "BpmnTaskFlowError",
     "BpmnCbmcUnsupportedElementError",
     "CbmcBuildError",
+    "CbmcAssertionError",
+    "CbmcRunError",
+    "CbmcUnreachableError",
     "BpmnUnrecognizedElement",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",

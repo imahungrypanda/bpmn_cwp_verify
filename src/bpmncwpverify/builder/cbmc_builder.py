@@ -1,7 +1,7 @@
 from returns.result import Failure, Result, Success
 
 from bpmncwpverify.builder.cbmc_bound import compute_bound
-from bpmncwpverify.core.bpmn import Bpmn
+from bpmncwpverify.core.bpmn import Bpmn, EndEvent
 from bpmncwpverify.core.cwp import Cwp
 from bpmncwpverify.core.error import CbmcBuildError, Error, NotInitializedError
 from bpmncwpverify.core.state import State
@@ -17,8 +17,13 @@ from bpmncwpverify.visitors.bpmn_cbmc_visitor import (
 )
 from bpmncwpverify.visitors.cwp_cbmc_visitor import (
     CALCULATE_STATE_FUNC,
+    STATE_PREFIX,
+    STATE_VAR,
     CwpCbmcVisitor,
 )
+
+REACHABILITY_MACRO = "REACHABILITY"
+COVER_FUNC = "reachability_cover"
 
 _C_TYPES = {
     "bit": "_Bool",
@@ -67,11 +72,50 @@ def _generate_state_c(state: State) -> Result[str, Error]:
     return Success("\n".join(lines) + "\n\n")
 
 
+def _generate_covers(
+    cwp: Cwp,
+    cwp_visitor: CwpCbmcVisitor,
+    bpmn: Bpmn,
+    bpmn_visitor: BpmnCbmcVisitor,
+) -> str:
+    """
+    One `__CPROVER_cover` per end event (its transition is enabled) and per CWP
+    state, only seen when REACHABILITY is defined. The CWP's start state is
+    left out: the initial values put the CWP in the state after it.
+    """
+    end_ids = {
+        node.id
+        for process in bpmn.processes.values()
+        for node in process.all_items().values()
+        if isinstance(node, EndEvent)
+    }
+    sm = StringManager()
+    sm.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    sm.write_str(f"static void {COVER_FUNC}(void) {{", NL_SINGLE, IndentAction.INC)
+    for tr in bpmn_visitor.transitions:
+        if tr.name in end_ids:
+            sm.write_str(
+                f"__CPROVER_cover({tr.enable}); // end event {tr.name}", NL_SINGLE
+            )
+    for state in cwp_visitor.states:
+        if state is not cwp.start_state:
+            sm.write_str(
+                f"__CPROVER_cover({STATE_VAR} == {STATE_PREFIX}{state.name}); // CWP state {state.name}",
+                NL_SINGLE,
+            )
+    sm.write_str("}", NL_SINGLE, IndentAction.DEC)
+    sm.write_str("#endif", NL_DOUBLE)
+    return str(sm)
+
+
 def _generate_main(bound: int, done_expr: str) -> str:
     sm = StringManager()
     sm.write_str(f"#define BOUND {bound}u", NL_DOUBLE)
     sm.write_str("int main(void) {", NL_SINGLE, IndentAction.INC)
     sm.write_str(f"{CALCULATE_STATE_FUNC}();", NL_SINGLE)
+    sm.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    sm.write_str(f"{COVER_FUNC}();", NL_SINGLE)
+    sm.write_str("#endif", NL_SINGLE)
     sm.write_str(
         "for (unsigned int pass = 0; pass < BOUND; pass++) {",
         NL_SINGLE,
@@ -79,6 +123,9 @@ def _generate_main(bound: int, done_expr: str) -> str:
     )
     sm.write_str(f"if ({done_expr}) break;", NL_SINGLE)
     sm.write_str(f"{STEP_FUNC}();", NL_SINGLE)
+    sm.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    sm.write_str(f"{COVER_FUNC}();", NL_SINGLE)
+    sm.write_str("#endif", NL_SINGLE)
     sm.write_str("}", NL_SINGLE, IndentAction.DEC)
     sm.write_str("return 0;", NL_SINGLE)
     sm.write_str("}", NL_SINGLE, IndentAction.DEC)
@@ -98,7 +145,8 @@ def _generate_c(state: State, cwp: Cwp, bpmn: Bpmn) -> Result[CbmcProgram, Error
         return bpmn_c
     bound = compute_bound(bpmn)
     main_c = _generate_main(bound, bpmn_visitor.done_expr)
-    source = f"{vars_c.unwrap()}{cwp_visitor}{bpmn_c.unwrap()}{main_c}"
+    covers_c = _generate_covers(cwp, cwp_visitor, bpmn, bpmn_visitor)
+    source = f"{vars_c.unwrap()}{cwp_visitor}{bpmn_c.unwrap()}{covers_c}{main_c}"
     return Success(CbmcProgram(source, bound))
 
 
