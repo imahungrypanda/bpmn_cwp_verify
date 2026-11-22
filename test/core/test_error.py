@@ -30,6 +30,7 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcBuildError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -168,6 +169,10 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnCbmcUnsupportedElementError("elem_id", "kind"),
         "BPMN ERROR: kind 'elem_id' cannot be expressed in C, so it is not supported by the CBMC back end.",
+    ),
+    (
+        CbmcBuildError("no start event"),
+        "CBMC ERROR: could not build the C program: no start event",
     ),
     (
         CwpEdgeNoParentExprError(mock.Mock(attrib="edge_attrib")),
@@ -343,6 +348,7 @@ test_ids: list[str] = [
     "BpmnTaskFlowError",
     "BpmnUnrecognizedElement",
     "BpmnCbmcUnsupportedElementError",
+    "CbmcBuildError",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
     "CwpFileStructureError",
