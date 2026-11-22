@@ -163,3 +163,25 @@ def test_other_exceptions_become_build_error(mocker):
     error = builder(straight()).build().failure()
     assert isinstance(error, CbmcBuildError)
     assert error.reason == "boom"
+
+
+def test_given_workflow_when_build_then_occupied_places_asserted_once_per_pass():
+    from xml.etree.ElementTree import parse
+
+    from returns.unsafe import unsafe_perform_io  # noqa: F401
+
+    from bpmncwpverify.core.accessmethods import bpmnmethods
+    from bpmncwpverify.core.accessmethods.cwpmethods import CwpXmlParser
+
+    folder = "./test/resources/simple_example"
+    with open(f"{folder}/state.txt") as f:
+        state = State.from_str(f.read()).unwrap()
+    cwp = CwpXmlParser.from_xml(parse(f"{folder}/test_cwp.xml").getroot(), state)
+    bpmn = bpmnmethods.from_xml(parse(f"{folder}/simple_open.bpmn").getroot(), state)
+
+    c = CbmcBuilder().with_state(state).with_cwp(cwp.unwrap()).with_bpmn(bpmn.unwrap())
+    c = c.build().unwrap()
+
+    assert c.count("already-occupied") == 1
+    assert c.count("occupied = (") > 1
+    assert c.count("__CPROVER_cover(") == c.count("/* cover:")
