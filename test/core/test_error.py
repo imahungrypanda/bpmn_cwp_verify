@@ -5,6 +5,7 @@ import pytest
 from returns.maybe import Nothing, Some
 
 from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedElementError,
     BpmnFlowIncomingError,
     BpmnFlowNoIdError,
     BpmnFlowOutgoingError,
@@ -29,6 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
+    CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -159,6 +164,26 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnTaskFlowError("task_id"),
         "Task flow error: Task 'task_id' should have at least one incoming and one outgoing flow.",
+    ),
+    (
+        BpmnCbmcUnsupportedElementError("Gateway_1", "parallel gateway"),
+        "BPMN ERROR: parallel gateway 'Gateway_1' cannot be expressed in C for CBMC",
+    ),
+    (
+        CbmcBuildError("no C type"),
+        "CBMC ERROR: Could not build the C program: no C type",
+    ),
+    (
+        CbmcAssertionError([{"description": "boom", "line": "12"}]),
+        "CBMC ERROR: Assertion failed: boom (line 12)",
+    ),
+    (
+        CbmcRunError("parse error"),
+        "CBMC ERROR: CBMC could not be run: parse error",
+    ),
+    (
+        CbmcUnreachableError([{"description": "CWP state 'A'"}]),
+        "CBMC ERROR: The workflow never reaches: CWP state 'A'",
     ),
     (
         BpmnUnrecognizedElement("element_name"),
@@ -336,6 +361,11 @@ test_ids: list[str] = [
     "BpmnSeqFlowNoExprError",
     "BpmnStructureError",
     "BpmnTaskFlowError",
+    "BpmnCbmcUnsupportedElementError",
+    "CbmcBuildError",
+    "CbmcAssertionError",
+    "CbmcRunError",
+    "CbmcUnreachableError",
     "BpmnUnrecognizedElement",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
