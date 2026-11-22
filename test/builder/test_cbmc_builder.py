@@ -256,3 +256,28 @@ class TestCbmcBuilder:
         assert builder.with_state(make_state()) is builder
         assert builder.with_cwp(simple_cwp()) is builder
         assert builder.with_bpmn(linear_bpmn()) is builder
+
+
+def test_given_face2face_when_built_then_covers_only_in_reachability_block():
+    state = make_state(open(FACE2FACE + "state.txt").read())
+    cwp = CwpXmlParser.from_xml(
+        ET.parse(FACE2FACE + "cwp.xml").getroot(), state
+    ).unwrap()
+    bpmn = bpmnmethods.from_xml(
+        ET.parse(FACE2FACE + "workflow.bpmn").getroot(), state
+    ).unwrap()
+
+    c_code = (
+        CbmcBuilder()
+        .with_state(state)
+        .with_cwp(cwp)
+        .with_bpmn(bpmn)
+        .build()
+        .unwrap()
+        .c_code
+    )
+
+    block = c_code[c_code.index("#ifdef REACHABILITY") : c_code.index("int main")]
+    assert c_code.count("__CPROVER_cover(") == block.count("__CPROVER_cover(") == 7
+    assert "CWP_Start)" not in block
+    assert "CWP_Negotiations" in block

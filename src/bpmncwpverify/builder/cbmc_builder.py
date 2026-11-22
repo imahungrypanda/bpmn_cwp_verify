@@ -1,7 +1,7 @@
 from returns.result import Failure, Result, Success
 
 from bpmncwpverify.builder.cbmc_bound import calculate_cbmc_bound
-from bpmncwpverify.core.bpmn import Bpmn
+from bpmncwpverify.core.bpmn import Bpmn, EndEvent
 from bpmncwpverify.core.cwp import Cwp
 from bpmncwpverify.core.error import CbmcBuildError, Error, NotInitializedError
 from bpmncwpverify.core.state import State
@@ -15,12 +15,19 @@ from bpmncwpverify.visitors.bpmn_cbmc_visitor import (
     ALL_DONE_FUNC,
     STEP_FUNC,
     BpmnCbmcVisitor,
+    _ident,  # pyright: ignore[reportPrivateUsage]
 )
 from bpmncwpverify.visitors.bpmn_cbmc_visitor import INIT_FUNC as BPMN_INIT_FUNC
 from bpmncwpverify.visitors.cwp_cbmc_visitor import INIT_FUNC as CWP_INIT_FUNC
-from bpmncwpverify.visitors.cwp_cbmc_visitor import CwpCbmcVisitor
+from bpmncwpverify.visitors.cwp_cbmc_visitor import (
+    STATE_VAR,
+    CwpCbmcVisitor,
+    state_const,
+)
 
 STATE_START_STR = "//**********VARIABLE DECLARATION************//"
+REACHABILITY_MACRO = "REACHABILITY"
+COVER_FUNC = "check_reachability"
 STATE_END_STR = "//******************************************//"
 
 _C_TYPES = {
@@ -74,6 +81,31 @@ def _generate_state_c(state: State) -> str:
     return str(out)
 
 
+def _generate_covers(cwp: Cwp, bpmn: Bpmn, bpmn_c: str) -> str:
+    """
+    One cover per end event and per CWP state, only seen by the reachability
+    run. An end event is reached when a token is on its incoming flow, since
+    nothing else stops it from firing. The CWP's start state is left out: the
+    initial values put the CWP in the state after it.
+    """
+    out = StringManager()
+    out.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    out.write_str(f"static void {COVER_FUNC}(void) {{", NL_SINGLE, IndentAction.INC)
+    for process in bpmn.processes.values():
+        for node in process.all_items().values():
+            func = f"bpmn_enabled_{_ident(node.id)}"
+            if isinstance(node, EndEvent) and f"{func}(" in bpmn_c:
+                out.write_str(f"__CPROVER_cover({func}());", NL_SINGLE)
+    for state in cwp.states.values():
+        if state is not cwp.start_state:
+            out.write_str(
+                f"__CPROVER_cover({STATE_VAR} == {state_const(state)});", NL_SINGLE
+            )
+    out.write_str("}", NL_SINGLE, IndentAction.DEC)
+    out.write_str("#endif", NL_DOUBLE)
+    return str(out)
+
+
 def _generate_main(bound: int) -> str:
     # The CWP is put in the state the initial values give it before any step,
     # like caculateState() in the Promela init block
@@ -81,9 +113,15 @@ def _generate_main(bound: int) -> str:
     out.write_str("int main(void) {", NL_SINGLE, IndentAction.INC)
     out.write_str(f"{CWP_INIT_FUNC}();", NL_SINGLE)
     out.write_str(f"{BPMN_INIT_FUNC}();", NL_SINGLE)
+    out.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    out.write_str(f"{COVER_FUNC}();", NL_SINGLE)
+    out.write_str("#endif", NL_SINGLE)
     out.write_str(f"for (unsigned pass = 0; pass < {bound}u; pass++) {{", NL_SINGLE)
     out.write_str(f"    if ({ALL_DONE_FUNC}()) break;", NL_SINGLE)
     out.write_str(f"    {STEP_FUNC}();", NL_SINGLE)
+    out.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    out.write_str(f"    {COVER_FUNC}();", NL_SINGLE)
+    out.write_str("#endif", NL_SINGLE)
     out.write_str("}", NL_SINGLE)
     out.write_str("return 0;", NL_SINGLE)
     out.write_str("}", NL_SINGLE, IndentAction.DEC)
@@ -104,7 +142,8 @@ def _generate_c(state: State, cwp: Cwp, bpmn: Bpmn) -> Result[CbmcOutputs, Error
     bound = calculate_cbmc_bound(bpmn)
     return bpmn_visitor.result().map(
         lambda bpmn_c: CbmcOutputs(
-            f"{_generate_state_c(state)}{cwp_visitor}{bpmn_c}{_generate_main(bound)}\n",
+            f"{_generate_state_c(state)}{cwp_visitor}{bpmn_c}"
+            f"{_generate_covers(cwp, bpmn, bpmn_c)}{_generate_main(bound)}\n",
             bound,
         )
     )

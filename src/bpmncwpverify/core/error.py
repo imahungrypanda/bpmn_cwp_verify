@@ -224,6 +224,30 @@ class CbmcBuildError(Error):
         self.reason = reason
 
 
+class CbmcAssertionError(Error):
+    __slots__ = ["failures"]
+
+    def __init__(self, failures: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.failures = failures
+
+
+class CbmcRunError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class CbmcUnreachableError(Error):
+    __slots__ = ["unreached"]
+
+    def __init__(self, unreached: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.unreached = unreached
+
+
 class CwpEdgeNoParentExprError(Error):
     __slots__ = ["edge"]
 
@@ -687,6 +711,23 @@ def get_error_message(error: Error) -> str:
             return f"BPMN ERROR: {element_kind} '{element_id}' cannot be expressed in C, so it is not supported by the CBMC back end."
         case CbmcBuildError(reason=reason):
             return f"CBMC ERROR: could not build the C program: {reason}"
+        case CbmcAssertionError(failures=failures):
+            lines = ["Assertion Error:", f"{len(failures)} assertion(s) failed:"]
+            for idx, failure in enumerate(failures):
+                lines.append(
+                    f"{idx + 1}: {failure['description']} (line {failure['line']}, {failure['property']})"
+                )
+            return "\n".join(lines)
+        case CbmcRunError(reason=reason):
+            return f"CBMC ERROR: failed to run CBMC: {reason}"
+        case CbmcUnreachableError(unreached=unreached):
+            lines = [
+                "Unreachable Error:",
+                f"{len(unreached)} cover(s) can never be reached by the workflow:",
+            ]
+            for idx, item in enumerate(unreached):
+                lines.append(f"{idx + 1}: {item['description']} (line {item['line']})")
+            return "\n".join(lines)
         case CwpEdgeNoParentExprError(edge=edge):
             return f"CWP ERROR: Expression or parent node not found in edge. Edge details: {edge.attrib}."
         case CwpEdgeNoStateError(edge=edge):
