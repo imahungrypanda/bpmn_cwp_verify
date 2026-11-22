@@ -1,23 +1,32 @@
 from returns.result import Failure, Result, Success
 
 from bpmncwpverify.builder.cbmc_bound import compute_bound
-from bpmncwpverify.core.bpmn import Bpmn
-from bpmncwpverify.core.cwp import Cwp
+from bpmncwpverify.core.bpmn import Bpmn, BpmnVisitor, EndEvent
+from bpmncwpverify.core.cwp import Cwp, CwpState, CwpVisitor
 from bpmncwpverify.core.error import CbmcBuildError, Error, NotInitializedError
 from bpmncwpverify.core.state import State
-from bpmncwpverify.util.stringmanager import NL_SINGLE, IndentAction, StringManager
+from bpmncwpverify.util.stringmanager import (
+    NL_DOUBLE,
+    NL_SINGLE,
+    IndentAction,
+    StringManager,
+)
 from bpmncwpverify.visitors.bpmn_cbmc_visitor import (
     ALL_DONE_FUNC,
     STEP_FUNC,
     BpmnCbmcVisitor,
+    place_name,
 )
 from bpmncwpverify.visitors.cwp_cbmc_visitor import (
     CALCULATE_FUNC,
+    STATE_VAR,
     UPDATE_FUNC,
     CwpCbmcVisitor,
 )
 
 BOUND_MACRO = "BPMN_BOUND"
+REACHABILITY_MACRO = "REACHABILITY"
+COVER_FUNC = "check_reachability"
 
 _C_TYPES = {
     "bit": "unsigned char",
@@ -67,15 +76,77 @@ def _generate_bpmn_c(bpmn: Bpmn) -> Result[str, Error]:
     return visitor.get_result()
 
 
+class _CwpStateCollector(CwpVisitor):
+    def __init__(self) -> None:
+        self.states: list[CwpState] = []
+
+    def visit_state(self, state: CwpState) -> bool:
+        self.states.append(state)
+        return True
+
+
+class _EndEventCollector(BpmnVisitor):
+    def __init__(self) -> None:
+        self.events: list[EndEvent] = []
+
+    def visit_end_event(self, event: EndEvent) -> bool:
+        self.events.append(event)
+        return True
+
+
+def _generate_cover(cwp: Cwp, bpmn: Bpmn) -> str:
+    """
+    One `__CPROVER_cover` per end event and per CWP state, behind `REACHABILITY`
+    so that only the reachability run sees them. The CWP's start state is left
+    out: the initial values put the CWP into the state after it.
+    """
+    states = _CwpStateCollector()
+    cwp.accept(states)
+    ends = _EndEventCollector()
+    bpmn.accept(ends)
+
+    out = StringManager()
+    out.write_str(f"#ifdef {REACHABILITY_MACRO}", NL_SINGLE)
+    out.write_str(f"static void {COVER_FUNC}(void) {{", NL_SINGLE, IndentAction.INC)
+    for event in ends.events:
+        parts = [place_name(msg.id) for msg in event.in_msgs]
+        if event.in_flows:
+            flows = " || ".join(place_name(flow.id) for flow in event.in_flows)
+            parts.insert(0, f"({flows})")
+        enable = " && ".join(parts) or "0"
+        out.write_str(
+            f'__CPROVER_cover({enable}); // end event "{event.id}"', NL_SINGLE
+        )
+    for state in states.states:
+        if state is not cwp.start_state:
+            out.write_str(
+                f'__CPROVER_cover({STATE_VAR} == CWP_STATE_{state.name}); // CWP state "{state.name}"',
+                NL_SINGLE,
+            )
+    out.write_str("}", NL_SINGLE, IndentAction.DEC)
+    out.write_str("#else", NL_SINGLE)
+    out.write_str(f"#define {COVER_FUNC}() ((void)0)", NL_SINGLE)
+    out.write_str("#endif", NL_DOUBLE)
+    return str(out)
+
+
 def _generate_main(bound: int) -> str:
     main = StringManager()
     main.write_str(f"#define {BOUND_MACRO} {bound}", NL_SINGLE)
     main.write_str("", NL_SINGLE)
     main.write_str("int main(void) {", NL_SINGLE, IndentAction.INC)
     main.write_str(f"{CALCULATE_FUNC}();", NL_SINGLE)
-    main.write_str(f"while (!{ALL_DONE_FUNC}()) {{", NL_SINGLE, IndentAction.INC)
+    main.write_str(f"{COVER_FUNC}();", NL_SINGLE)
+    main.write_str("unsigned int passes = 0;", NL_SINGLE)
+    main.write_str(
+        f"while (!{ALL_DONE_FUNC}() && passes < {BOUND_MACRO}) {{",
+        NL_SINGLE,
+        IndentAction.INC,
+    )
+    main.write_str("passes++;", NL_SINGLE)
     main.write_str(f"{STEP_FUNC}();", NL_SINGLE)
     main.write_str(f"{UPDATE_FUNC}();", NL_SINGLE)
+    main.write_str(f"{COVER_FUNC}();", NL_SINGLE)
     main.write_str("}", NL_SINGLE, IndentAction.DEC)
     main.write_str("return 0;", NL_SINGLE)
     main.write_str("}", NL_SINGLE, IndentAction.DEC)
@@ -91,7 +162,8 @@ def _generate_c(state: State, cwp: Cwp, bpmn: Bpmn) -> Result[str, Error]:
         return bpmn_c
     cwp_c = _generate_cwp_c(cwp)
     main_c = _generate_main(compute_bound(bpmn))
-    return Success(f"{state_c.unwrap()}{cwp_c}\n{bpmn_c.unwrap()}\n{main_c}")
+    cover_c = _generate_cover(cwp, bpmn)
+    return Success(f"{state_c.unwrap()}{cwp_c}\n{bpmn_c.unwrap()}\n{cover_c}{main_c}")
 
 
 class CbmcBuilder:
