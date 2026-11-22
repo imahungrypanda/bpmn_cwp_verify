@@ -7,6 +7,7 @@ from defusedxml import ElementTree
 from returns.result import Failure, Success
 
 from bpmncwpverify.core.accessmethods import bpmnmethods
+from bpmncwpverify.core.accessmethods.cwpmethods import CwpXmlParser
 from bpmncwpverify.core.bpmn import (
     Bpmn,
     EndEvent,
@@ -19,7 +20,6 @@ from bpmncwpverify.core.bpmn import (
     StartEvent,
     Task,
 )
-from bpmncwpverify.core.error import BpmnCbmcUnsupportedElementError
 from bpmncwpverify.core.state import State
 from bpmncwpverify.visitors.bpmn_cbmc_visitor import (
     ALL_DONE_FUNC,
@@ -27,7 +27,9 @@ from bpmncwpverify.visitors.bpmn_cbmc_visitor import (
     BpmnCbmcVisitor,
     done_name,
     place_name,
+    translate_behavior,
 )
+from bpmncwpverify.visitors.cwp_cbmc_visitor import CwpCbmcVisitor
 
 RESOURCES = Path(__file__).parent.parent / "resources" / "face2face"
 
@@ -197,27 +199,6 @@ def test_awkward_ids_become_identifiers():
     assert place_name("a-b") != place_name("a_b")
 
 
-@pytest.mark.parametrize(
-    "node, kind",
-    [
-        (ParallelGatewayNode("G", "G"), "parallel gateway"),
-    ],
-)
-def test_unsupported_element_is_an_error(node, kind):
-    process = make_process()
-    start = add(process, StartEvent("S", "S", "", ""))
-    add(process, node)
-    end = add(process, EndEvent("E", "E", "", ""))
-    link(process, start, node, "F1")
-    link(process, node, end, "F2")
-    result = gen(process).get_result()
-    assert isinstance(result, Failure)
-    error = result.failure()
-    assert isinstance(error, BpmnCbmcUnsupportedElementError)
-    assert error.element_id == "G"
-    assert error.element_type == kind
-
-
 def test_boundary_event_is_an_error():
     process = make_process()
     start = add(process, StartEvent("S", "S", "", ""))
@@ -300,10 +281,265 @@ def load_face2face(name):
     return bpmnmethods.from_xml(root, state).unwrap()
 
 
-def test_face2face_open_is_generated_up_to_parallel_gateways():
-    bpmn = load_face2face("face2face_open.bpmn")
-    visitor = BpmnCbmcVisitor()
-    bpmn.accept(visitor)
-    # face2face has parallel gateways, which are not handled here yet.
-    assert isinstance(visitor.error, BpmnCbmcUnsupportedElementError)
-    assert visitor.error.element_type == "parallel gateway"
+def index_of(code, node_id):
+    """Index of the first transition generated for a node."""
+    return int(code.split(f"// {node_id}\nstatic bool enabled_")[1].split("(")[0])
+
+
+def body(code, index):
+    return code.split(f"static void run_{index}(void) {{")[1].split("\n}")[0]
+
+
+def fork_join():
+    process = make_process()
+    start = add(process, StartEvent("S", "S", "", ""))
+    fork = add(process, ParallelGatewayNode("Fork", "Fork"))
+    a = add(process, Task("A", "A", ""))
+    b = add(process, Task("B", "B", ""))
+    join = add(process, ParallelGatewayNode("Join", "Join"))
+    end = add(process, EndEvent("E", "E", "", ""))
+    link(process, start, fork, "F0")
+    link(process, fork, a, "FA")
+    link(process, fork, b, "FB")
+    link(process, a, join, "JA")
+    link(process, b, join, "JB").is_leaf = True
+    link(process, join, end, "F9")
+    return process
+
+
+def test_fork_starts_every_branch():
+    visitor = gen(fork_join())
+    assert visitor.error is None
+    code = repr(visitor)
+    # S, Fork, A, B, Join, E
+    assert visitor.transition_count == 6
+    assert f"static bool enabled_1(void) {{\n\treturn ({place_name('F0')});" in code
+    run = body(code, 1)
+    assert f"PUT_TOKEN({place_name('FA')});" in run
+    assert f"PUT_TOKEN({place_name('FB')});" in run
+
+
+def test_join_waits_for_every_incoming_flow():
+    code = repr(gen(fork_join()))
+    assert f"return {place_name('JA')} && {place_name('JB')};" in code
+    run = body(code, index_of(code, "Join"))
+    assert f"CONSUME_TOKEN({place_name('JA')});" in run
+    assert f"CONSUME_TOKEN({place_name('JB')});" in run
+    assert f"PUT_TOKEN({place_name('F9')});" in run
+
+
+def loop_fork():
+    process = make_process()
+    start = add(process, StartEvent("S", "S", "", ""))
+    fork = add(process, ParallelGatewayNode("Fork", "Fork"))
+    a = add(process, Task("A", "A", ""))
+    b = add(process, Task("B", "B", ""))
+    gw = add(process, ExclusiveGatewayNode("G", "G"))
+    end = add(process, EndEvent("E", "E", "", ""))
+    link(process, start, fork, "F0")
+    link(process, fork, a, "FA")
+    link(process, fork, b, "FB")
+    link(process, a, gw, "GA")
+    link(process, b, end, "FE")
+    link(process, gw, fork, "Back", "x > 0").is_leaf = True
+    link(process, gw, end, "Out", "x <= 0").is_leaf = True
+    return process
+
+
+def test_fork_with_loop_back_is_enabled_by_any_incoming_flow():
+    code = repr(gen(loop_fork()))
+    assert (
+        f"static bool enabled_1(void) {{\n\treturn ({place_name('F0')} || {place_name('Back')});"
+        in code
+    )
+
+
+def test_fork_with_loop_back_does_not_deadlock(tmp_path):
+    visitor = gen(loop_fork())
+    assert visitor.transition_count == 7
+    # Only the loop-back flow has a token: the fork must still fire.
+    setup = f"{place_name('S')} = false; {place_name('Back')} = true;"
+    proc = run_cbmc(tmp_path, visitor, "int x = 0;", 8, setup)
+    assert "VERIFICATION SUCCESSFUL" in proc.stdout, proc.stdout
+
+
+def nested():
+    process = make_process()
+    start = add(process, StartEvent("S", "S", "", ""))
+    outer = add(process, ParallelGatewayNode("Outer", "Outer"))
+    inner = add(process, ParallelGatewayNode("Inner", "Inner"))
+    a = add(process, Task("A", "A", ""))
+    b = add(process, Task("B", "B", ""))
+    c = add(process, Task("C", "C", ""))
+    inner_join = add(process, ParallelGatewayNode("InnerJoin", "InnerJoin"))
+    outer_join = add(process, ParallelGatewayNode("OuterJoin", "OuterJoin"))
+    end = add(process, EndEvent("E", "E", "", ""))
+    link(process, start, outer, "F0")
+    link(process, outer, inner, "O1")
+    link(process, outer, c, "O2")
+    link(process, inner, a, "I1")
+    link(process, inner, b, "I2")
+    link(process, a, inner_join, "J1")
+    link(process, b, inner_join, "J2").is_leaf = True
+    link(process, inner_join, outer_join, "IJ")
+    link(process, c, outer_join, "CJ").is_leaf = True
+    link(process, outer_join, end, "F9")
+    return process
+
+
+def test_nested_parallel_gateways(tmp_path):
+    visitor = gen(nested())
+    assert visitor.error is None
+    code = repr(visitor)
+    assert f"return {place_name('J1')} && {place_name('J2')};" in code
+    assert f"return {place_name('IJ')} && {place_name('CJ')};" in code
+    proc = run_cbmc(tmp_path, visitor, "", 12)
+    assert "VERIFICATION SUCCESSFUL" in proc.stdout, proc.stdout
+
+
+def test_fork_and_join_verify_with_cbmc(tmp_path):
+    proc = run_cbmc(tmp_path, gen(fork_join()), "", 8)
+    assert "VERIFICATION SUCCESSFUL" in proc.stdout, proc.stdout
+
+
+def test_join_with_missing_branch_is_stuck(tmp_path):
+    # Drop B's token path: the join can never fire, so the end is unreachable.
+    visitor = gen(fork_join())
+    proc = run_cbmc(tmp_path, visitor, "", 5)
+    assert "VERIFICATION FAILED" in proc.stdout
+
+
+def test_translate_assignments():
+    assert translate_behavior("a = b\nc = d;") == ["a = b;", "c = d;"]
+    assert translate_behavior("skip") == []
+    assert translate_behavior("") == []
+
+
+def test_translate_assert():
+    assert translate_behavior("assert(a != b)") == [
+        '__CPROVER_assert(a != b, "behavior assertion");'
+    ]
+
+
+def test_translate_if_with_comparisons():
+    lines = translate_behavior("if\n:: a == 1 && b != 2 -> x = c\n:: true -> x = d\nfi")
+    text = "\n".join(lines)
+    assert text.count("nondet_uint()") == 1
+    assert "__CPROVER_assume(a == 1 && b != 2);" in text
+    assert "x = c;" in text and "x = d;" in text
+    # `true` guards need no assumption
+    assert text.count("__CPROVER_assume(") == 2  # one guard, one default
+
+
+def test_translate_else_and_nested_if():
+    lines = translate_behavior(
+        "if\n:: s == d\n:: else ->\n  if\n  :: true -> x = 1\n     y = 2;\n  fi\nfi"
+    )
+    text = "\n".join(lines)
+    assert "__CPROVER_assume(s == d);" in text
+    assert "__CPROVER_assume(!((s == d)));" in text
+    assert text.count("switch (nondet_uint())") == 2
+    assert "x = 1;" in text and "y = 2;" in text
+
+
+def test_translate_guard_split_over_lines():
+    text = "\n".join(translate_behavior("if\n:: (a == 1) &&\n (b != 2)\n -> z = 3\nfi"))
+    assert "__CPROVER_assume((a == 1) && (b != 2));" in text
+
+
+def task_process(behavior):
+    process = make_process()
+    start = add(process, StartEvent("S", "S", "", ""))
+    task = add(process, Task("T", "T", behavior))
+    end = add(process, EndEvent("E", "E", "", ""))
+    link(process, start, task, "F1")
+    link(process, task, end, "F2")
+    return process
+
+
+def test_behavior_is_followed_by_cwp_update():
+    code = repr(gen(task_process("x = 1\ny = 2")))
+    run = body(code, 1)
+    assert "x = 1;\n\ty = 2;\n\tcwp_update_state();" in run
+    assert run.index("cwp_update_state();") < run.index("PUT_TOKEN")
+    assert run.count("cwp_update_state") == 1
+
+
+def test_empty_behavior_has_no_cwp_update():
+    code = repr(gen(task_process("")))
+    assert "cwp_update_state" not in code
+    code = repr(gen(task_process("  \n ")))
+    assert "cwp_update_state" not in code
+
+
+def test_task_behavior_changes_state_in_cbmc(tmp_path):
+    visitor = gen(task_process("if\n:: x == 0 -> x = 1\n:: x == 0 -> x = 2\nfi"))
+    decls = (
+        'int x = 0;\nvoid cwp_update_state(void) { __CPROVER_assert(x != 2, "bad"); }'
+    )
+    proc = run_cbmc(tmp_path, visitor, decls, 3)
+    assert "VERIFICATION FAILED" in proc.stdout
+    assert "bad" in proc.stdout
+    decls = decls.replace("x != 2", "x == 1 || x == 2")
+    proc = run_cbmc(tmp_path, visitor, decls, 3)
+    assert "VERIFICATION SUCCESSFUL" in proc.stdout, proc.stdout
+
+
+def test_behavior_assert_is_checked(tmp_path):
+    visitor = gen(task_process("assert(x == 1)\nx = 2"))
+    decls = "int x = 0;\nvoid cwp_update_state(void) {}"
+    proc = run_cbmc(tmp_path, visitor, decls, 3)
+    assert "VERIFICATION FAILED" in proc.stdout
+
+
+def face2face_c(name, tmp_path):
+    state = State.from_str((RESOURCES / "state.txt").read_text()).unwrap()
+    bpmn = load_face2face(name)
+    cwp = CwpXmlParser.from_xml(
+        ElementTree.fromstring((RESOURCES / "cwp.xml").read_text()), state
+    ).unwrap()
+    bpmn_visitor = BpmnCbmcVisitor()
+    bpmn.accept(bpmn_visitor)
+    assert bpmn_visitor.error is None
+    cwp_visitor = CwpCbmcVisitor()
+    cwp.accept(cwp_visitor)
+    values = {}
+    for i, v in enumerate("agreed failed pending noRetry buyerName sellerName".split()):
+        values[v] = i
+    defines = "".join(f"#define {k} {v}\n" for k, v in values.items())
+    defines += "".join(
+        f"#define {k} {v}\n"
+        for k, v in dict(
+            paymentAmount=253,
+            belowPaymentAmount=252,
+            noRetryPayment=254,
+            pendingPayment=255,
+        ).items()
+    )
+    decls = (
+        defines
+        + "unsigned char terms = pending;\n"
+        + "unsigned char backpackOwner = sellerName;\n"
+        + "unsigned char paymentOwner = buyerName;\n"
+        + "unsigned char paymentOffered = pendingPayment;\n"
+    )
+    return decls + repr(cwp_visitor) + "\n" + repr(bpmn_visitor)
+
+
+@pytest.mark.parametrize("name", ["workflow.bpmn", "face2face_open.bpmn"])
+def test_face2face_generates_without_error(name, tmp_path):
+    code = face2face_c(name, tmp_path)
+    assert "cwp_update_state();" in code
+    assert "parallel gateway" not in code
+    c_file = tmp_path / "f2f.c"
+    c_file.write_text(
+        code + f"\nint main(void) {{ cwp_calculate_state();\n"
+        f"  for (int i = 0; i < 25; i++) {{ if ({ALL_DONE_FUNC}()) break; {STEP_FUNC}(); }}\n}}\n"
+    )
+    proc = subprocess.run(
+        ["cbmc", str(c_file), "--unwind", "26", "--unwinding-assertions"],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert "VERIFICATION SUCCESSFUL" in proc.stdout, proc.stdout[-2000:]
