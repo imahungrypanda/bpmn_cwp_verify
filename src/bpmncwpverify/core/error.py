@@ -1,6 +1,5 @@
 # TODO: create a "match" function on Failure(Error) and create standard error messaging.
 import builtins
-import typing
 from xml.etree.ElementTree import Element
 
 import requests
@@ -26,6 +25,47 @@ class BpmnNoSwimLaneNameError(Error):
     def __init__(self, ids: list[str]) -> None:
         super().__init__()
         self.ids = ids
+
+
+class CbmcBuildError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class CbmcAssertionError(Error):
+    __slots__ = ["failures"]
+
+    def __init__(self, failures: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.failures = failures
+
+
+class CbmcUnreachableError(Error):
+    __slots__ = ["unreachable"]
+
+    def __init__(self, unreachable: list[str]) -> None:
+        super().__init__()
+        self.unreachable = unreachable
+
+
+class CbmcRunError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class BpmnCbmcUnsupportedElementError(Error):
+    __slots__ = ["element_id", "reason"]
+
+    def __init__(self, element_id: str, reason: str) -> None:
+        super().__init__()
+        self.element_id = element_id
+        self.reason = reason
 
 
 class BpmnFlowIncomingError(Error):
@@ -82,7 +122,7 @@ class BpmnInvalidIdError(Error):
 
 
 class BpmnMissingEventsError(Error):
-    __slots__ = ["start_events", "end_events"]
+    __slots__ = ["end_events", "start_events"]
 
     def __init__(self, start_events: int, end_events: int) -> None:
         super().__init__()
@@ -107,7 +147,7 @@ class BpmnMsgFlowSamePoolError(Error):
 
 
 class BpmnMsgGatewayError(Error):
-    __slots__ = ["gateway_type", "gateway_id"]
+    __slots__ = ["gateway_id", "gateway_type"]
 
     def __init__(self, gateway_type: str, gateway_id: str) -> None:
         super().__init__()
@@ -132,7 +172,7 @@ class BpmnMsgNodeTypeError(Error):
 
 
 class BpmnMsgSrcError(Error):
-    __slots__ = ["obj_type", "node_id"]
+    __slots__ = ["node_id", "obj_type"]
 
     def __init__(self, obj_type: str, node_id: str) -> None:
         super().__init__()
@@ -149,7 +189,7 @@ class BpmnMsgStartEventError(Error):
 
 
 class BpmnMsgTargetError(Error):
-    __slots__ = ["obj_type", "node_id"]
+    __slots__ = ["node_id", "obj_type"]
 
     def __init__(self, obj_type: str, node_id: str) -> None:
         super().__init__()
@@ -183,7 +223,7 @@ class BpmnSeqFlowNoExprError(Error):
 
 
 class BpmnStructureError(Error):
-    __slots__ = ["node_id", "error_msg"]
+    __slots__ = ["error_msg", "node_id"]
 
     def __init__(self, node_id: str, error_msg: str) -> None:
         super().__init__()
@@ -224,7 +264,7 @@ class CwpEdgeNoStateError(Error):
 
 
 class CwpUnsupportedElementError(Error):
-    __slots__ = ["number_of_elements", "element"]
+    __slots__ = ["element", "number_of_elements"]
 
     def __init__(self, number_of_elements: int, element: str) -> None:
         super().__init__()
@@ -279,7 +319,7 @@ class ExpressionComputationCompatabilityError(Error):
         self.ltype = ltype
         self.rtype = rtype
 
-    def __eq__(self, other: typing.Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, ExpressionComputationCompatabilityError):
             return self.ltype == other.ltype and self.rtype == other.rtype
         return False
@@ -292,7 +332,7 @@ class ExpressionNegatorError(Error):
         super().__init__()
         self._type = type
 
-    def __eq__(self, other: typing.Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, ExpressionNegatorError):
             return self._type == other._type
         return False
@@ -314,7 +354,7 @@ class ExpressionRelationCompatabilityError(Error):
         self.ltype = ltype
         self.rtype = rtype
 
-    def __eq__(self, other: typing.Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, ExpressionComputationCompatabilityError):
             return self.ltype == other.ltype and self.rtype == other.rtype
         return False
@@ -327,7 +367,7 @@ class ExpressionRelationalNotError(Error):
         super().__init__()
         self._type = type
 
-    def __eq__(self, other: typing.Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, ExpressionRelationalNotError):
             return self._type == other._type
         return False
@@ -340,7 +380,7 @@ class ExpressionUnrecognizedID(Error):
         super().__init__()
         self._id = id
 
-    def __eq__(self, other: typing.Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, ExpressionUnrecognizedID):
             return self._id == other._id
         return False
@@ -371,7 +411,7 @@ class FileXmlParseError(Error):
 
 
 class FlowExpressionError(Error):
-    __slots__ = ["flow_id", "expression", "exception_str"]
+    __slots__ = ["exception_str", "expression", "flow_id"]
 
     def __init__(self, flow_id: str, expression: str, exception_str: str):
         super().__init__()
@@ -381,7 +421,7 @@ class FlowExpressionError(Error):
 
 
 class HttpError(Error):
-    __slots__ = ["status", "reason", "body"]
+    __slots__ = ["body", "reason", "status"]
 
     def __init__(self, status: int, reason: str, body: str):
         super().__init__()
@@ -407,7 +447,7 @@ class LambdaVerificationError(Error):
 
 
 class MessageError(Error):
-    __slots__ = ["node_id", "error_msg"]
+    __slots__ = ["error_msg", "node_id"]
 
     def __init__(self, node_id: str, error_msg: str) -> None:
         super().__init__()
@@ -493,7 +533,7 @@ class SpinSyntaxError(Error):
 
 
 class StateInitNotInValues(Error):
-    __slots__ = ["id", "line", "column", "values"]
+    __slots__ = ["column", "id", "line", "values"]
 
     def __init__(
         self, id: str, line: Maybe[int], column: Maybe[int], values: set[str]
@@ -504,7 +544,7 @@ class StateInitNotInValues(Error):
         self.column = column
         self.values = values
 
-    def __eq__(self, other: typing.Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, StateInitNotInValues):
             return (
                 self.id == other.id
@@ -516,7 +556,7 @@ class StateInitNotInValues(Error):
 
 
 class StateMultipleDefinitionError(Error):
-    __slots__ = ("id", "line", "column", "prev_line", "prev_column")
+    __slots__ = ("column", "id", "line", "prev_column", "prev_line")
 
     def __init__(
         self,
@@ -533,7 +573,7 @@ class StateMultipleDefinitionError(Error):
         self.prev_line = prev_line
         self.prev_column = prev_column
 
-    def __eq__(self, other: typing.Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, StateMultipleDefinitionError):
             return (
                 self.id == other.id
@@ -577,7 +617,7 @@ class TypingAssignCompatabilityError(Error):
         self.ltype = ltype
         self.rtype = rtype
 
-    def __eq__(self, other: typing.Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, TypingAssignCompatabilityError):
             return self.ltype == other.ltype and self.rtype == other.rtype
         return False
@@ -598,7 +638,7 @@ class TypingNoTypeError(Error):
         super().__init__()
         self.id = id
 
-    def __eq__(self, other: typing.Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, TypingNoTypeError):
             return self.id == other.id
         return False
@@ -620,6 +660,22 @@ def get_error_message(error: Error) -> str:
             )
         case BpmnNoSwimLaneNameError(ids=ids):
             return f"Bpmn error: {ids} must have a swimlane with a name that is different from their ID"
+        case CbmcBuildError(reason=reason):
+            return f"CBMC ERROR: Could not build the C program: {reason}."
+        case CbmcAssertionError(failures=failures):
+            return "\n".join(
+                f"CBMC ERROR: Assertion failed: {failure['description']} (line {failure['line']})"
+                for failure in failures
+            )
+        case CbmcUnreachableError(unreachable=unreachable):
+            return "\n".join(
+                f"CBMC ERROR: The workflow can never reach: {item}"
+                for item in unreachable
+            )
+        case CbmcRunError(reason=reason):
+            return f"CBMC ERROR: Could not run CBMC: {reason}."
+        case BpmnCbmcUnsupportedElementError(element_id=element_id, reason=reason):
+            return f"BPMN CBMC ERROR: Element '{element_id}' can't be expressed in C: {reason}."
         case BpmnFlowIncomingError(node_id=node_id):
             return f"Flow error: All flow objects other than start events, boundary events, and compensating activities must have an incoming sequence flow, if the process level includes any start or end events. node: {node_id}."
         case BpmnFlowNoIdError(element=element):
@@ -738,7 +794,7 @@ def get_error_message(error: Error) -> str:
         case SpinCoverageError(coverage_errors=coverage_errors):
             return "\n".join(
                 [
-                    f"Proctype: {error['proctype']}, File: {error['file']}, Line: {str(error['line'])}, Message: {error['message']}"
+                    f"Proctype: {error['proctype']}, File: {error['file']}, Line: {error['line']!s}, Message: {error['message']}"
                     for error in coverage_errors
                 ]
             )

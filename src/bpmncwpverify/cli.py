@@ -9,6 +9,7 @@ from returns.unsafe import unsafe_perform_io
 
 from bpmncwpverify.core.accessmethods import bpmnmethods
 from bpmncwpverify.core.accessmethods.cwpmethods import CwpXmlParser
+from bpmncwpverify.core.cbmc import CbmcVerificationReport, verify_with_cbmc
 from bpmncwpverify.core.error import (
     Error,
     HttpError,
@@ -48,6 +49,11 @@ def _get_argument_parser() -> "argparse.ArgumentParser":
         help="BPMN workflow file in XML",
     )
     argument_parser.add_argument(
+        "--cbmc",
+        action="store_true",
+        help="Verify with CBMC instead of SPIN",
+    )
+    argument_parser.add_argument(
         "--cloud",
         action="store_true",
         help="Run verification remotely on AWS Lambda",
@@ -72,6 +78,44 @@ def _verify_with_spin(
         )
     )
 
+    return result
+
+
+def _verify_with_cbmc(
+    state_str: str,
+    cwp_xml: Element,
+    bpmn_xml: Element,
+) -> IOResult[CbmcVerificationReport, Error]:
+    result: IOResult[CbmcVerificationReport, Error] = IOResult.from_result(
+        State.from_str(state_str)
+    ).bind(  # pyright: ignore[reportUnknownMemberType]
+        lambda state: IOResult.from_result(CwpXmlParser.from_xml(cwp_xml, state)).bind(  # pyright: ignore[reportUnknownMemberType]
+            lambda cwp: IOResult.from_result(
+                bpmnmethods.from_xml(bpmn_xml, state)
+            ).bind(  # pyright: ignore[reportUnknownMemberType]
+                lambda bpmn: verify_with_cbmc(state, cwp, bpmn)
+            )
+        )
+    )
+    return result
+
+
+def _verify_with_cbmc_from_files(
+    state_file: str, cwp_file: str, bpmn_file: str
+) -> IOResult[CbmcVerificationReport, Error]:
+    result: IOResult[CbmcVerificationReport, Error] = read_file_as_string(
+        state_file
+    ).bind(  # pyright: ignore[reportUnknownMemberType]
+        lambda state: read_file_as_string(cwp_file).bind(  # pyright: ignore[reportUnknownMemberType]
+            lambda cwp: read_file_as_string(bpmn_file).bind(  # pyright: ignore[reportUnknownMemberType]
+                lambda bpmn: element_tree_from_string(cwp).bind(  # pyright: ignore[reportUnknownMemberType]
+                    lambda cwp_xml: element_tree_from_string(bpmn).bind(  # pyright: ignore[reportUnknownMemberType]
+                        lambda bpmn_xml: _verify_with_cbmc(state, cwp_xml, bpmn_xml)
+                    )
+                )
+            )
+        )
+    )
     return result
 
 
@@ -144,9 +188,28 @@ def cli_verify(
     return result
 
 
+def cli_verify_with_cbmc(
+    state_file: str, cwp_file: str, bpmn_file: str
+) -> IOResult[CbmcVerificationReport, Error]:
+    return _verify_with_cbmc_from_files(state_file, cwp_file, bpmn_file)
+
+
 def verify() -> None:
     argument_parser = _get_argument_parser()
     args = argument_parser.parse_args()
+
+    if args.cbmc and args.cloud:
+        argument_parser.error("--cbmc can't be used with --cloud")
+
+    if args.cbmc:
+        cbmc_result = cli_verify_with_cbmc(
+            args.state_file, args.cwp_file, args.bpmn_file
+        )
+        if not_(is_successful)(cbmc_result):
+            print(get_error_message(unsafe_perform_io(cbmc_result.failure())))
+            return
+        print(unsafe_perform_io(cbmc_result.unwrap()).cbmc_report)
+        return
 
     if args.cloud:
         result = _verify_on_lambda_from_files(

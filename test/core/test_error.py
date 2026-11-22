@@ -5,6 +5,7 @@ import pytest
 from returns.maybe import Nothing, Some
 
 from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedElementError,
     BpmnFlowIncomingError,
     BpmnFlowNoIdError,
     BpmnFlowOutgoingError,
@@ -29,6 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
+    CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -75,6 +80,31 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnNoSwimLaneNameError(["Proces_32kdf8"]),
         "Bpmn error: ['Proces_32kdf8'] must have a swimlane with a name that is different from their ID",
+    ),
+    (
+        CbmcBuildError("no reason"),
+        "CBMC ERROR: Could not build the C program: no reason.",
+    ),
+    (
+        CbmcAssertionError(
+            [
+                {"description": "first", "line": "3"},
+                {"description": "second", "line": "9"},
+            ]
+        ),
+        "CBMC ERROR: Assertion failed: first (line 3)\nCBMC ERROR: Assertion failed: second (line 9)",
+    ),
+    (
+        CbmcUnreachableError(["CWP state A", "end event E"]),
+        "CBMC ERROR: The workflow can never reach: CWP state A\nCBMC ERROR: The workflow can never reach: end event E",
+    ),
+    (
+        CbmcRunError("no cbmc"),
+        "CBMC ERROR: Could not run CBMC: no cbmc.",
+    ),
+    (
+        BpmnCbmcUnsupportedElementError("id", "no reason"),
+        "BPMN CBMC ERROR: Element 'id' can't be expressed in C: no reason.",
     ),
     (
         BpmnFlowIncomingError("node_id"),
@@ -315,6 +345,11 @@ test_inputs: list[tuple[Error, str]] = [
 test_ids: list[str] = [
     "BpmnNoElementNameError",
     "BpmnNoSwimLaneNameError",
+    "CbmcBuildError",
+    "CbmcAssertionError",
+    "CbmcUnreachableError",
+    "CbmcRunError",
+    "BpmnCbmcUnsupportedElementError",
     "BpmnFlowIncomingError",
     "BpmnFlowNoIdError",
     "BpmnFlowOutgoingError",
