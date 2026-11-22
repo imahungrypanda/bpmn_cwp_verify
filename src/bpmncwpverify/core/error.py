@@ -216,6 +216,14 @@ class BpmnCbmcUnsupportedElementError(Error):
         self.element_type = element_type
 
 
+class CbmcBuildError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
 class CwpEdgeNoParentExprError(Error):
     __slots__ = ["edge"]
 
@@ -635,6 +643,8 @@ def get_error_message(error: Error) -> str:
             return (
                 f"BPMN ERROR: {element_type} '{element_id}' cannot be expressed in C."
             )
+        case CbmcBuildError(reason=reason):
+            return f"CBMC ERROR: Could not build the C program. {reason}"
         case BpmnFlowIncomingError(node_id=node_id):
             return f"Flow error: All flow objects other than start events, boundary events, and compensating activities must have an incoming sequence flow, if the process level includes any start or end events. node: {node_id}."
         case BpmnFlowNoIdError(element=element):
