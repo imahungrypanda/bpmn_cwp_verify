@@ -30,7 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
     CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -81,6 +84,23 @@ test_inputs: list[tuple[Error, str]] = [
     (
         CbmcBuildError("no reason"),
         "CBMC ERROR: Could not build the C program: no reason.",
+    ),
+    (
+        CbmcAssertionError(
+            [
+                {"description": "first", "line": "3"},
+                {"description": "second", "line": "9"},
+            ]
+        ),
+        "CBMC ERROR: Assertion failed: first (line 3)\nCBMC ERROR: Assertion failed: second (line 9)",
+    ),
+    (
+        CbmcUnreachableError(["CWP state A", "end event E"]),
+        "CBMC ERROR: The workflow can never reach: CWP state A\nCBMC ERROR: The workflow can never reach: end event E",
+    ),
+    (
+        CbmcRunError("no cbmc"),
+        "CBMC ERROR: Could not run CBMC: no cbmc.",
     ),
     (
         BpmnCbmcUnsupportedElementError("id", "no reason"),
@@ -326,6 +346,9 @@ test_ids: list[str] = [
     "BpmnNoElementNameError",
     "BpmnNoSwimLaneNameError",
     "CbmcBuildError",
+    "CbmcAssertionError",
+    "CbmcUnreachableError",
+    "CbmcRunError",
     "BpmnCbmcUnsupportedElementError",
     "BpmnFlowIncomingError",
     "BpmnFlowNoIdError",
