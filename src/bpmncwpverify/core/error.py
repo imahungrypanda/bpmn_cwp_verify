@@ -207,6 +207,14 @@ class BpmnUnrecognizedElement(Error):
         self.element_name = element_name
 
 
+class CbmcBuildError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
 class BpmnCbmcUnsupportedElementError(Error):
     __slots__ = ["element_id", "reason"]
 
@@ -675,6 +683,8 @@ def get_error_message(error: Error) -> str:
             return (
                 f"BPMN ERROR: Element '{element_id}' cannot be expressed in C: {reason}"
             )
+        case CbmcBuildError(reason=reason):
+            return f"ERROR: failed to build C for CBMC: {reason}"
         case BpmnUnrecognizedElement(element_name=element_name):
             return f"BPMN ERROR: Unrecognized bpmn element type in workflow: {element_name}"
         case CwpEdgeNoParentExprError(edge=edge):

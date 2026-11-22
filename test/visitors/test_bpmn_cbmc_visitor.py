@@ -213,17 +213,166 @@ def test_get_result_success():
     assert "bpmn_step" in result.unwrap()
 
 
-def test_parallel_gateway_is_an_error():
-    s, g, e = start("S"), ParallelGatewayNode("G", "G"), end("E")
+def par(i, fork=False):
+    return ParallelGatewayNode(i, i, fork)
+
+
+def by_id(v, element_id):
+    return next(t for t in v.transitions if t.element_id == element_id)
+
+
+def fork_join():
+    s, f, a, b, j, e = (
+        start("S"),
+        par("F"),
+        Task("A", "A", ""),
+        Task("B", "B", ""),
+        par("J"),
+        end("E"),
+    )
     p = Process("P", "P")
-    add(p, s, g, e)
-    connect(s, g, "f1")
-    connect(g, e, "f2")
-    result = generate(make_bpmn(p)).get_result()
+    add(p, s, f, a, b, j, e)
+    connect(s, f, "f1")
+    connect(f, a, "fa")
+    connect(f, b, "fb")
+    connect(a, j, "ja")
+    connect(b, j, "jb")
+    connect(j, e, "f2")
+    return make_bpmn(p)
+
+
+def test_fork_starts_every_branch():
+    v = generate(fork_join())
+    t = by_id(v, "F")
+    assert "flow_f1 = 0;" in t.body
+    assert "flow_fa = 1;" in t.body
+    assert "flow_fb = 1;" in t.body
+    assert t.enable == "!ended_P && (flow_f1)"
+
+
+def test_join_waits_for_every_incoming_flow():
+    v = generate(fork_join())
+    t = by_id(v, "J")
+    assert t.enable == "!ended_P && (flow_ja && flow_jb)"
+    assert "flow_ja = 0;" in t.body
+    assert "flow_jb = 0;" in t.body
+    assert "flow_f2 = 1;" in t.body
+    assert isinstance(generate(fork_join()).get_result(), Success)
+
+
+def test_fork_with_loop_back_enabled_by_any_incoming_flow():
+    s, f, t, x, e = (
+        start("S"),
+        par("F"),
+        Task("T", "T", ""),
+        ExclusiveGatewayNode("X", "X"),
+        end("E"),
+    )
+    side = Task("Side", "Side", "")
+    p = Process("P", "P")
+    add(p, s, f, t, x, e, side)
+    connect(s, f, "f1")
+    connect(f, t, "ft")
+    connect(f, side, "fs")
+    connect(t, x, "tx")
+    connect(x, f, "loop", "again == 1")
+    connect(x, e, "out", "again == 0")
+    connect(side, e, "se")
+    v = generate(make_bpmn(p))
+    entries = [t_ for t_ in v.transitions if t_.element_id.endswith("->F")]
+    assert {t_.enable for t_ in entries} == {
+        "!ended_P && flow_f1",
+        "!ended_P && flow_loop",
+    }
+    # each entry consumes only its own token and starts both branches
+    for t_ in entries:
+        assert sum(line.endswith("= 0;") for line in t_.body) == 1
+        assert "flow_ft = 1;" in t_.body and "flow_fs = 1;" in t_.body
+    assert isinstance(v.get_result(), Success)
+
+
+def test_nested_parallel_gateways():
+    s, f1, f2 = start("S"), par("F1"), par("F2")
+    a, b, c = Task("A", "A", ""), Task("B", "B", ""), Task("C", "C", "")
+    j2, j1, e = par("J2"), par("J1"), end("E")
+    p = Process("P", "P")
+    add(p, s, f1, f2, a, b, c, j2, j1, e)
+    connect(s, f1, "s1")
+    connect(f1, f2, "f1f2")
+    connect(f1, c, "f1c")
+    connect(f2, a, "f2a")
+    connect(f2, b, "f2b")
+    connect(a, j2, "aj2")
+    connect(b, j2, "bj2")
+    connect(j2, j1, "j2j1")
+    connect(c, j1, "cj1")
+    connect(j1, e, "j1e")
+    v = generate(make_bpmn(p))
+    assert [t.element_id for t in v.transitions].count("F2") == 1
+    assert "flow_f1f2 = 1;" in by_id(v, "F1").body
+    assert "flow_f1c = 1;" in by_id(v, "F1").body
+    assert by_id(v, "J2").enable == "!ended_P && (flow_aj2 && flow_bj2)"
+    assert by_id(v, "J1").enable == "!ended_P && (flow_j2j1 && flow_cj1)"
+    assert len(v.transitions) == 9
+    assert isinstance(v.get_result(), Success)
+
+
+def task_with(behavior):
+    s, t, e = start("S"), Task("T", "T", behavior), end("E")
+    p = Process("P", "P")
+    add(p, s, t, e)
+    connect(s, t, "f1")
+    connect(t, e, "f2")
+    return generate(make_bpmn(p))
+
+
+def test_empty_behavior_has_no_update():
+    body = by_id(task_with(""), "T").body
+    assert not any("cwp_update_state" in line for line in body)
+
+
+def test_assignment_behavior_then_cwp_update():
+    body = by_id(
+        task_with("backpackOwner = buyerName\npaymentOwner = sellerName"), "T"
+    ).body
+    assert body.index("backpackOwner = buyerName;") < body.index(
+        "paymentOwner = sellerName;"
+    )
+    assert body.index("paymentOwner = sellerName;") < body.index("cwp_update_state();")
+    assert body.count("cwp_update_state();") == 1
+    # the update comes after the behavior and before tokens move on
+    assert body.index("cwp_update_state();") < body.index("flow_f2 = 1;")
+
+
+def test_if_behavior_is_a_guarded_nondeterministic_choice():
+    v = task_with(
+        "if\n:: true -> terms = agreed\n:: x == 1 && y != 2 -> terms = failed\nfi"
+    )
+    body = "\n".join(by_id(v, "T").body)
+    assert "nondet_uint()" in body
+    assert "__CPROVER_assume(1);" in body
+    assert "__CPROVER_assume(x == 1 && y != 2);" in body
+    assert "terms = agreed;" in body and "terms = failed;" in body
+    assert body.count("cwp_update_state();") == 1
+    assert isinstance(v.get_result(), Success)
+
+
+def test_else_option_and_nested_if():
+    v = task_with(
+        "if\n:: a == 1 -> if\n:: b == 1 -> x = 1\n:: else -> x = 2\nfi\n:: else -> x = 3\nfi"
+    )
+    body = "\n".join(by_id(v, "T").body)
+    assert "__CPROVER_assume(!(a == 1));" in body
+    assert "__CPROVER_assume(!(b == 1));" in body
+    assert "x = 1;" in body and "x = 2;" in body and "x = 3;" in body
+    assert isinstance(v.get_result(), Success)
+
+
+def test_malformed_behavior_is_an_error():
+    result = task_with("if\n:: true -> x = 1").get_result()
     assert isinstance(result, Failure)
-    err = result.failure()
-    assert isinstance(err, BpmnCbmcUnsupportedElementError)
-    assert err.element_id == "G"
+    assert isinstance(result.failure(), BpmnCbmcUnsupportedElementError)
+    assert result.failure().element_id == "T"
 
 
 def test_boundary_event_is_an_error():
@@ -258,3 +407,42 @@ def test_generated_c_runs_through_cbmc(tmp_path):
     )
     assert proc.returncode == 0, proc.stdout
     assert "VERIFICATION SUCCESSFUL" in proc.stdout
+
+
+@pytest.mark.skipif(shutil.which("cbmc") is None, reason="cbmc not installed")
+@pytest.mark.parametrize("passes,ok", [(7, True), (3, False)])
+def test_fork_join_with_behavior_through_cbmc(tmp_path, passes, ok):
+    s, f, a, b, j, e = (
+        start("S"),
+        par("F"),
+        Task("A", "A", "x = 1"),
+        Task("B", "B", "if\n:: x == 1 -> y = 2\n:: else -> y = 3\nfi"),
+        par("J"),
+        end("E"),
+    )
+    p = Process("P", "P")
+    add(p, s, f, a, b, j, e)
+    connect(s, f, "f1")
+    connect(f, a, "fa")
+    connect(f, b, "fb")
+    connect(a, j, "ja")
+    connect(b, j, "jb")
+    connect(j, e, "f2")
+    v = generate(make_bpmn(p))
+    main = (
+        "int x = 0; int y = 0; int updates = 0;\n"
+        "void cwp_update_state(void) { updates++; }\n" + repr(v) + "int main(void) {\n"
+        f"  for (unsigned i = 0; i < {passes}; i++) {{\n"
+        "    if (ended_P) break;\n"
+        "    bpmn_step();\n"
+        "  }\n"
+        f'  __CPROVER_assert(ended_P, "ends within {passes} passes");\n'
+        '  __CPROVER_assert(x == 1 && (y == 2 || y == 3) && updates == 2, "state");\n'
+        "  return 0;\n}\n"
+    )
+    src = tmp_path / "m.c"
+    src.write_text(main)
+    proc = subprocess.run(
+        ["cbmc", str(src), "--unwind", str(passes + 1)], capture_output=True, text=True
+    )
+    assert (proc.returncode == 0) == ok, proc.stdout

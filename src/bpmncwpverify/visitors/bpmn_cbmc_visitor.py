@@ -18,6 +18,7 @@ from bpmncwpverify.core.bpmn import (
 )
 from bpmncwpverify.core.error import BpmnCbmcUnsupportedElementError, Error
 from bpmncwpverify.util.stringmanager import IndentAction, StringManager
+from bpmncwpverify.visitors.cwp_cbmc_visitor import UPDATE_FUNC
 
 ##############
 # Constants
@@ -31,6 +32,66 @@ CHOICE_VAR = "choice"
 DEFS_STR = "unsigned int nondet_uint(void);\n\n"
 OCCUPIED_MSG = "Attempting to place token in already-occupied place"
 ##############
+
+
+def _c_expr(raw: str) -> str:
+    """Promela-style boolean literals to their C spelling."""
+    return re.sub(r"\bfalse\b", "0", re.sub(r"\btrue\b", "1", " ".join(raw.split())))
+
+
+def _tokenize_behavior(behavior: str) -> list[tuple[str, str, str]]:
+    """
+    Splits a Promela-style behavior into ("if"|"fi"|"opt"|"stmt", guard, text)
+    tokens. An option is `:: guard -> statements`.
+    """
+    tokens: list[tuple[str, str, str]] = []
+    for line in behavior.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if line in ("if", "fi"):
+            tokens.append((line, "", ""))
+            continue
+        rest = line
+        if line.startswith("::"):
+            guard, arrow, rest = line[2:].partition("->")
+            if not arrow:
+                raise ValueError(f"option without '->': {line}")
+            tokens.append(("opt", guard.strip(), ""))
+        for stmt in rest.split(";"):
+            stmt = stmt.strip()
+            if stmt in ("if", "fi"):
+                tokens.append((stmt, "", ""))
+            elif stmt:
+                tokens.append(("stmt", "", stmt))
+    return tokens
+
+
+# A parsed behavior is a list of statements (str) and choices. A choice is a
+# list of (guard, statements) options.
+_Block = list["str | list[tuple[str, _Block]]"]
+
+
+def _parse_block(tokens: list[tuple[str, str, str]], pos: int) -> tuple[_Block, int]:
+    block: _Block = []
+    while pos < len(tokens):
+        kind, _, text = tokens[pos]
+        if kind in ("opt", "fi"):
+            break
+        pos += 1
+        if kind == "stmt":
+            block.append(text)
+            continue
+        options: list[tuple[str, _Block]] = []
+        while pos < len(tokens) and tokens[pos][0] == "opt":
+            guard = tokens[pos][1]
+            body, pos = _parse_block(tokens, pos + 1)
+            options.append((guard, body))
+        if not options or pos >= len(tokens) or tokens[pos][0] != "fi":
+            raise ValueError("malformed if ... fi")
+        pos += 1
+        block.append(options)
+    return block, pos
 
 
 def _ident(raw: str) -> str:
@@ -71,6 +132,7 @@ class CbmcBpmnVisitor(BpmnVisitor):
         "_ended_flags",
         "_seen",
         "_declared",
+        "_choice_count",
     ]
 
     def __init__(self) -> None:
@@ -82,6 +144,7 @@ class CbmcBpmnVisitor(BpmnVisitor):
         self._ended_flags: list[str] = []
         self._seen: set[str] = set()
         self._declared: set[str] = set()
+        self._choice_count = 0
 
     ####################
     # Naming
@@ -142,11 +205,11 @@ class CbmcBpmnVisitor(BpmnVisitor):
             init = 1 if place.startswith("start_") else 0
             self.places.write_str(f"_Bool {place} = {init};", NL_SINGLE)
 
-    def _enable(self, element: Node, extra: str = "") -> str:
+    def _enable(self, element: Node, extra: str = "", join: bool = False) -> str:
         seq, msgs = self._in_places(element)
         parts = [f"!{self.ended_flag(self._process_ids[-1])}"]
         if seq:
-            parts.append("(" + " || ".join(seq) + ")")
+            parts.append("(" + (" && " if join else " || ").join(seq) + ")")
         parts.extend(msgs)
         if extra:
             parts.append(f"({extra})")
@@ -173,9 +236,49 @@ class CbmcBpmnVisitor(BpmnVisitor):
             self.msg_place(m) for m in element.out_msgs
         ]
 
+    def _emit_block(self, block: _Block) -> list[str]:
+        lines: list[str] = []
+        for item in block:
+            if isinstance(item, str):
+                if item != "skip":
+                    lines.append(f"{_c_expr(item)};")
+                continue
+            # An if picks any option whose guard holds; else holds when no
+            # other guard does.
+            guards = [g for g, _ in item if g != "else"]
+            var = f"bchoice_{self._choice_count}"
+            self._choice_count += 1
+            lines.append("{")
+            lines.append(f"unsigned int {var} = nondet_uint();")
+            lines.append(f"__CPROVER_assume({var} < {len(item)}u);")
+            for idx, (guard, body) in enumerate(item):
+                if guard == "else":
+                    cond = " && ".join(f"!({_c_expr(g)})" for g in guards) or "1"
+                else:
+                    cond = _c_expr(guard)
+                lines.append(f"{'else ' if idx else ''}if ({var} == {idx}u) {{")
+                lines.append(f"__CPROVER_assume({cond});")
+                lines.extend(self._emit_block(body))
+                lines.append("}")
+            lines.append("}")
+        return lines
+
     def _behavior(self, task: Task) -> list[str]:
-        # Placeholder: task behaviors are generated by a later subtask.
-        return []
+        """
+        The task's behavior as C, followed by a CWP update, like the Promela
+        visitor's updateState(). An empty behavior generates nothing.
+        """
+        if not task.behavior.strip():
+            return []
+        try:
+            tokens = _tokenize_behavior(task.behavior)
+            block, pos = _parse_block(tokens, 0)
+            if pos != len(tokens):
+                raise ValueError("unexpected option or fi")
+        except ValueError as e:
+            self._fail(task.id, f"unsupported behavior: {e}")
+            return []
+        return self._emit_block(block) + [f"{UPDATE_FUNC}();"]
 
     def _visit_plain(
         self,
@@ -282,8 +385,39 @@ class CbmcBpmnVisitor(BpmnVisitor):
         return True
 
     def visit_parallel_gateway(self, gateway: ParallelGatewayNode) -> bool:
-        self._fail(gateway.id, "parallel gateways are not supported yet")
-        return False
+        if gateway.id in self._seen:
+            return False
+        self._seen.add(gateway.id)
+        self._declare_places(gateway)
+        outs = self._out_places(gateway, gateway.out_flows)
+
+        if not gateway.is_fork:
+            # Join: waits for a token on every incoming flow.
+            body = self._consume(gateway)
+            body.extend(self._produce(outs))
+            self.transitions.append(
+                Transition(gateway.id, self._enable(gateway, join=True), body)
+            )
+        elif len(gateway.in_flows) > 1:
+            # Fork that is also a merge (e.g. a loop coming back in): each
+            # arriving token starts every branch, so one transition per
+            # incoming flow, each consuming only its own token.
+            for flow in gateway.in_flows:
+                place = self.seq_place(flow)
+                body = [f"{place} = 0;"]
+                body.extend(self._produce(outs))
+                self.transitions.append(
+                    Transition(
+                        f"{flow.id}->{gateway.id}",
+                        f"!{self.ended_flag(self._process_ids[-1])} && {place}",
+                        body,
+                    )
+                )
+        else:
+            body = self._consume(gateway)
+            body.extend(self._produce(outs))
+            self.transitions.append(Transition(gateway.id, self._enable(gateway), body))
+        return True
 
     def visit_message_flow(self, flow: MessageFlow) -> bool:
         return True
