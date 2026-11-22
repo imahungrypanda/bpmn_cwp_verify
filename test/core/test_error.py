@@ -5,6 +5,7 @@ import pytest
 from returns.maybe import Nothing, Some
 
 from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedElementError,
     BpmnFlowIncomingError,
     BpmnFlowNoIdError,
     BpmnFlowOutgoingError,
@@ -29,6 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
+    CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -159,6 +164,26 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnTaskFlowError("task_id"),
         "Task flow error: Task 'task_id' should have at least one incoming and one outgoing flow.",
+    ),
+    (
+        CbmcAssertionError([{"description": "bad", "line": "7"}]),
+        "CBMC assertion error: 1 assertion(s) failed:\n1: bad (line 7)",
+    ),
+    (
+        CbmcUnreachableError(["CWP state A", "BPMN end event B"]),
+        "CBMC reachability error: 2 never reached:\n1: CWP state A\n2: BPMN end event B",
+    ),
+    (
+        CbmcRunError("boom"),
+        "ERROR: failed to run 'cbmc': boom",
+    ),
+    (
+        CbmcBuildError("some reason"),
+        "ERROR: failed to build C for CBMC: some reason",
+    ),
+    (
+        BpmnCbmcUnsupportedElementError("elem_id", "some reason"),
+        "BPMN ERROR: Element 'elem_id' cannot be expressed in C: some reason",
     ),
     (
         BpmnUnrecognizedElement("element_name"),
@@ -336,6 +361,11 @@ test_ids: list[str] = [
     "BpmnSeqFlowNoExprError",
     "BpmnStructureError",
     "BpmnTaskFlowError",
+    "BpmnCbmcUnsupportedElementError",
+    "CbmcAssertionError",
+    "CbmcUnreachableError",
+    "CbmcRunError",
+    "CbmcBuildError",
     "BpmnUnrecognizedElement",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
