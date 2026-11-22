@@ -22,6 +22,7 @@ from bpmncwpverify.util.stringmanager import (
     IndentAction,
     StringManager,
 )
+from bpmncwpverify.visitors.cwp_cbmc_visitor import UPDATE_FUNC as CWP_UPDATE_FUNC
 
 START_STR = "//**********BPMN TOKEN DECLARATION************//"
 END_STR = "//********************************************//"
@@ -35,6 +36,115 @@ NONDET_FUNC = "nondet_uint"
 def _ident(name: str) -> str:
     """Turns a BPMN id into something that is safe to use in a C identifier."""
     return re.sub(r"\W", "_", name)
+
+
+_UNSUPPORTED_WORDS = re.compile(
+    r"\b(do|od|atomic|d_step|goto|break|unless|select|run|chan|timeout)\b"
+)
+_STATEMENT = re.compile(r"(?<![=!<>])=(?!=)|\+\+|--|^\w+\s*\(")
+_BEHAVIOR_TOKENS = re.compile(r"(\bif\b|\bfi\b|::|->|;|\n)")
+INDENT = "    "
+
+
+class _BehaviorError(Exception):
+    pass
+
+
+class _BehaviorTranslator:
+    """
+    Turns the Promela subset used in task behaviors into C: assignments, plain
+    statements, `skip`, and `if :: guard -> statements ... fi`, which may be
+    nested. An `if` picks one of its enabled options with a nondeterministic
+    choice, like Promela does. Nothing in the result loops.
+    """
+
+    def __init__(self, behavior: str) -> None:
+        self._tokens = [
+            t if t == "\n" else t.strip()
+            for t in _BEHAVIOR_TOKENS.split(behavior)
+            if t == "\n" or t.strip()
+        ]
+        self._pos = 0
+        self._choices = 0
+
+    def translate(self) -> list[str]:
+        lines = self._block()
+        if self._pos != len(self._tokens):
+            raise _BehaviorError(self._tokens[self._pos])
+        return lines
+
+    def _peek(self) -> str | None:
+        return self._tokens[self._pos] if self._pos < len(self._tokens) else None
+
+    def _skip_newlines(self) -> None:
+        while self._peek() == "\n":
+            self._pos += 1
+
+    def _block(self) -> list[str]:
+        lines: list[str] = []
+        while (tok := self._peek()) is not None and tok not in ("::", "fi"):
+            self._pos += 1
+            if tok in ("\n", ";"):
+                continue
+            if tok == "if":
+                lines += self._if()
+            elif tok == "->":
+                raise _BehaviorError(tok)
+            else:
+                lines += self._statement(tok)
+        return lines
+
+    def _statement(self, text: str) -> list[str]:
+        if text == "skip":
+            return []
+        if _UNSUPPORTED_WORDS.search(text):
+            raise _BehaviorError(text)
+        if _STATEMENT.search(text):
+            return [f"{text};"]
+        # A bare Promela expression blocks until it holds
+        return [f"__CPROVER_assume({text});"]
+
+    def _guard(self) -> str:
+        parts: list[str] = []
+        while (tok := self._peek()) is not None and tok != "->":
+            if tok in ("::", "fi", "if", ";"):
+                raise _BehaviorError(tok)
+            self._pos += 1
+            if tok != "\n":
+                parts.append(tok)
+        if self._peek() is None:
+            raise _BehaviorError("::")
+        self._pos += 1
+        return " ".join(parts)
+
+    def _if(self) -> list[str]:
+        options: list[tuple[str, list[str]]] = []
+        self._skip_newlines()
+        while self._peek() == "::":
+            self._pos += 1
+            guard = self._guard()
+            options.append((guard, self._block()))
+            self._skip_newlines()
+        if self._peek() != "fi" or not options:
+            raise _BehaviorError("if")
+        self._pos += 1
+        others = [f"!({g})" for g, _ in options if g != "else"]
+        choice = f"choice_{self._choices}"
+        self._choices += 1
+        lines = ["{", f"{INDENT}unsigned {choice} = {NONDET_FUNC}();"]
+        lines.append(f"{INDENT}switch ({choice}) {{")
+        for i, (guard, body) in enumerate(options):
+            cond = (" && ".join(others) or "true") if guard == "else" else guard
+            lines.append(f"{INDENT}case {i}:")
+            lines.append(f"{INDENT * 2}__CPROVER_assume({cond});")
+            lines += [INDENT * 2 + line for line in body]
+            lines.append(f"{INDENT * 2}break;")
+        lines.append(f"{INDENT}default:")
+        lines.append(f"{INDENT * 2}__CPROVER_assume(false);")
+        lines.append(f"{INDENT * 2}break;")
+        lines.append(f"{INDENT}}}")
+        lines.append("}")
+        return lines
 
 
 def place_name(source_id: str) -> str:
@@ -75,8 +185,16 @@ class BpmnCbmcVisitor(BpmnVisitor):
         Nothing in it loops over the transitions. Tokens landing on occupied
         places are checked with one assertion at the end of the pass.
 
-    Elements that C cannot express (for now parallel gateways and tasks with
-    boundary events) are recorded in `errors`, see `result()`.
+    A parallel gateway with several outgoing flows is a fork: it is enabled by
+    a token on any incoming flow and starts every outgoing flow. Otherwise it
+    is a join, which needs a token on every incoming flow.
+
+    A task's behavior is translated to C and run before the tokens move. A task
+    with a behavior then calls the CWP visitor's `cwp_update()`, so the CWP
+    follows the change, like `updateState()` in the Promela model.
+
+    Elements that C cannot express (tasks with boundary events, behaviors that
+    use more than Promela assignments, guards and `if`) are recorded in `errors`, see `result()`.
     """
 
     __slots__ = [
@@ -130,15 +248,18 @@ class BpmnCbmcVisitor(BpmnVisitor):
         for place in seq + msgs + self._out_places(node):
             self._places.setdefault(place)
 
-    def _enable(self, node: Node, condition: str = "") -> str:
+    def _enable(
+        self, node: Node, condition: str = "", all_incoming: bool = False
+    ) -> str:
         """
-        Any incoming sequence place has a token, and every incoming message
-        place has one, and the flow's condition holds.
+        Any incoming sequence place has a token (every one, if `all_incoming`),
+        and every incoming message place has one, and the flow's condition
+        holds.
         """
         seq, msgs = self._in_places(node)
         parts: list[str] = []
         if seq:
-            parts.append("(" + " || ".join(seq) + ")")
+            parts.append("(" + (" && " if all_incoming else " || ").join(seq) + ")")
         if msgs:
             parts.append("(" + " && ".join(msgs) + ")")
         if condition:
@@ -276,11 +397,21 @@ class BpmnCbmcVisitor(BpmnVisitor):
         self._add_simple(event)
         return True
 
+    def _behavior_lines(self, task: Task) -> list[str]:
+        lines = [f"// behavior of {task.id}"]
+        if not task.behavior.strip():
+            return lines
+        try:
+            lines += _BehaviorTranslator(task.behavior).translate()
+        except _BehaviorError:
+            self._unsupported(task, "Task behavior")
+        return lines + [f"{CWP_UPDATE_FUNC}();"]
+
     def visit_task(self, task: Task) -> bool:
         if task.msg_boundary_events:
             self._unsupported(task, "Task with boundary events")
-        # Placeholder for the task's behavior
-        self._add_simple(task, [f"// behavior of {task.id}"])
+        if all(t.name != _ident(task.id) for t in self._transitions):
+            self._add_simple(task, self._behavior_lines(task))
         return True
 
     def visit_boundary_event(self, boundary_event: Task.BoundaryEvent) -> bool:
@@ -298,8 +429,13 @@ class BpmnCbmcVisitor(BpmnVisitor):
         return True
 
     def visit_parallel_gateway(self, gateway: ParallelGatewayNode) -> bool:
-        self._unsupported(gateway, "Parallel gateway")
-        return False
+        self._declare(gateway)
+        self._add(
+            gateway.id,
+            self._enable(gateway, all_incoming=not gateway.is_fork),
+            self._body(gateway, self._out_places(gateway)),
+        )
+        return True
 
     def visit_sequence_flow(self, flow: SequenceFlow) -> bool:
         return True

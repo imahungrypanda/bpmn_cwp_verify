@@ -17,12 +17,16 @@ from bpmncwpverify.core.bpmn import (
     StartEvent,
     Task,
 )
+from bpmncwpverify.core.cwp import Cwp, CwpEdge, CwpState
 from bpmncwpverify.core.error import BpmnCbmcUnsupportedElementError
 from bpmncwpverify.visitors.bpmn_cbmc_visitor import (
     END_STR,
     START_STR,
     BpmnCbmcVisitor,
 )
+from bpmncwpverify.visitors.cwp_cbmc_visitor import CwpCbmcVisitor
+
+CWP_STUB = "static void cwp_update(void) {}\n"
 
 
 def start(id="S"):
@@ -289,16 +293,12 @@ class TestBpmnCbmcVisitor:
         bpmn.accept(visitor)
         assert visitor.transition_count == 3
 
-    def test_parallel_gateway_is_an_error(self):
+    def test_parallel_gateway_with_one_flow_is_a_join_without_error(self):
         s, g, e = start(), ParallelGatewayNode("PG", "PG"), end()
         link(s, g)
         link(g, e)
         visitor = visit(make_bpmn(s, g, e))
-        result = visitor.result()
-        assert isinstance(result, Failure)
-        error = result.failure()
-        assert isinstance(error, BpmnCbmcUnsupportedElementError)
-        assert error.element_id == "PG"
+        assert visitor.result() == Success(str(visitor))
 
     def test_boundary_event_is_an_error(self):
         s, t, e = start(), task(), end()
@@ -313,6 +313,196 @@ class TestBpmnCbmcVisitor:
         assert isinstance(visitor.result(), Failure)
 
 
+def fork_join():
+    s, f, a, b, j, e = (
+        start(),
+        ParallelGatewayNode("F", "F"),
+        task("A"),
+        task("B"),
+        ParallelGatewayNode("J", "J"),
+        end(),
+    )
+    link(s, f)
+    link(f, a)
+    link(f, b)
+    link(a, j)
+    link(b, j)
+    link(j, e)
+    return make_bpmn(s, f, a, b, j, e)
+
+
+def fork_loop(a_behavior="x = x + 1"):
+    """A fork that the start event and the loop at the end both flow into."""
+    s, f, a, b, j, g, e = (
+        start(),
+        ParallelGatewayNode("F", "F"),
+        task("A", a_behavior),
+        task("B"),
+        ParallelGatewayNode("J", "J"),
+        ExclusiveGatewayNode("G", "G"),
+        end(),
+    )
+    link(s, f)
+    link(f, a)
+    link(f, b)
+    link(a, j)
+    link(b, j)
+    link(j, g)
+    link(g, f, "back", "x < 2").is_leaf = True  # as the BPMN validation marks it
+    link(g, e, "exit", "x >= 2")
+    return make_bpmn(s, f, a, b, j, g, e)
+
+
+def nested():
+    """S -> F1 -> (A, F2 -> (B, C) -> J2) -> J1 -> E."""
+    s, f1, a, f2, b, c, j2, j1, e = (
+        start(),
+        ParallelGatewayNode("F1", "F1"),
+        task("A"),
+        ParallelGatewayNode("F2", "F2"),
+        task("B"),
+        task("C"),
+        ParallelGatewayNode("J2", "J2"),
+        ParallelGatewayNode("J1", "J1"),
+        end(),
+    )
+    link(s, f1)
+    link(f1, a)
+    link(f1, f2)
+    link(f2, b)
+    link(f2, c)
+    link(b, j2)
+    link(c, j2)
+    link(a, j1)
+    link(j2, j1)
+    link(j1, e)
+    return make_bpmn(s, f1, a, f2, b, c, j2, j1, e)
+
+
+def behavior_bpmn(behavior):
+    s, t, e = start(), task("T", behavior), end()
+    link(s, t)
+    link(t, e)
+    return make_bpmn(s, t, e)
+
+
+def fire_t(behavior):
+    return function_body(generate(behavior_bpmn(behavior)), "bpmn_fire_T")
+
+
+class TestBpmnCbmcParallelGateways:
+    def test_fork_is_enabled_by_any_incoming_and_starts_every_branch(self):
+        out = generate(fork_loop())
+        assert (
+            function_body(out, "bpmn_enabled_F").strip()
+            == "return (tok_S_F || tok_back);"
+        )
+        fire = function_body(out, "bpmn_fire_F")
+        assert "tok_S_F = false;" in fire and "tok_back = false;" in fire
+        assert "tok_F_A = true;" in fire and "tok_F_B = true;" in fire
+
+    def test_join_waits_for_every_incoming(self):
+        out = generate(fork_join())
+        assert (
+            function_body(out, "bpmn_enabled_J").strip()
+            == "return (tok_A_J && tok_B_J);"
+        )
+        fire = function_body(out, "bpmn_fire_J")
+        assert "tok_A_J = false;" in fire and "tok_B_J = false;" in fire
+        assert "tok_J_E = true;" in fire
+
+    def test_fork_checks_its_outgoing_places_for_overflow(self):
+        fire = function_body(generate(fork_join()), "bpmn_fire_F")
+        assert "bpmn_overflow = bpmn_overflow || tok_F_A || tok_F_B;" in fire
+
+    def test_nested_gateways_each_have_a_transition(self):
+        visitor = visit(nested())
+        out = str(visitor)
+        assert visitor.transition_count == 9
+        assert visitor.result() == Success(out)
+        assert (
+            function_body(out, "bpmn_enabled_J1").strip()
+            == "return (tok_A_J1 && tok_J2_J1);"
+        )
+        assert (
+            function_body(out, "bpmn_enabled_J2").strip()
+            == "return (tok_B_J2 && tok_C_J2);"
+        )
+        fire = function_body(out, "bpmn_fire_F1")
+        assert "tok_F1_A = true;" in fire and "tok_F1_F2 = true;" in fire
+
+    def test_no_loops_with_gateways(self):
+        assert not re.search(r"\b(for|while|do)\b", generate(fork_loop()))
+
+
+class TestBpmnCbmcBehaviors:
+    def test_empty_behavior_does_not_update_the_cwp(self):
+        assert "cwp_update" not in fire_t("")
+        assert "cwp_update" not in fire_t("  \n ")
+
+    def test_assignment(self):
+        fire = fire_t("backpackOwner = sellerName\npaymentOwner = buyerName")
+        assert "backpackOwner = sellerName;" in fire
+        assert "paymentOwner = buyerName;" in fire
+
+    def test_cwp_update_comes_after_behavior_and_before_tokens_move(self):
+        lines = [line.strip() for line in fire_t("x = x + 1").splitlines()]
+        assert lines.index("x = x + 1;") < lines.index("cwp_update();")
+        assert lines.index("cwp_update();") < lines.index("tok_T_E = true;")
+        assert lines.index("tok_S_T = false;") < lines.index("x = x + 1;")
+        assert lines.count("cwp_update();") == 1
+
+    def test_semicolon_separated_statements(self):
+        fire = fire_t("x = 1; y = 2")
+        assert "x = 1;" in fire and "y = 2;" in fire
+
+    def test_if_with_comparisons(self):
+        fire = fire_t("if\n:: x == 1 -> y = 2\n:: x != 1 && y < 3 -> y = 3\nfi")
+        assert fire.count("switch (choice_0)") == 1
+        assert "__CPROVER_assume(x == 1);" in fire
+        assert "__CPROVER_assume(x != 1 && y < 3);" in fire
+        assert "y = 2;" in fire and "y = 3;" in fire
+        assert fire.count("cwp_update();") == 1
+
+    def test_if_else(self):
+        fire = fire_t("if\n:: x == 1 -> y = 2\n:: else -> y = 3\nfi")
+        assert "__CPROVER_assume(!(x == 1));" in fire
+
+    def test_nested_if(self):
+        fire = fire_t(
+            "if\n:: true -> if\n:: x == 1 -> y = 1\n:: x == 2 -> y = 2\nfi\n"
+            ":: true -> y = 3\nfi"
+        )
+        assert "switch (choice_0)" in fire and "switch (choice_1)" in fire
+        assert not re.search(r"\b(for|while|do)\b", fire)
+
+    def test_skip_is_nothing(self):
+        fire = fire_t("skip")
+        assert "skip" not in fire
+        assert "cwp_update();" in fire
+
+    def test_bare_expression_blocks(self):
+        assert "__CPROVER_assume(x == 1);" in fire_t("x == 1")
+
+    @pytest.mark.parametrize(
+        "behavior",
+        ["do\n:: x = 1\nod", "goto end", "if\n:: x = 1", "x = 1\nfi", ":: x = 1"],
+    )
+    def test_unsupported_behavior_is_an_error(self, behavior):
+        visitor = visit(behavior_bpmn(behavior))
+        result = visitor.result()
+        assert isinstance(result, Failure)
+        assert isinstance(result.failure(), BpmnCbmcUnsupportedElementError)
+        assert result.failure().element_id == "T"
+
+    def test_shared_task_behavior_is_translated_once(self):
+        bpmn = behavior_bpmn("x = 1")
+        visitor = BpmnCbmcVisitor()
+        bpmn.accept(visitor)
+        bpmn.accept(visitor)
+        assert str(visitor).count("x = 1;") == 1
+
+
 class TestBpmnCbmcCompiles:
     def test_linear_compiles(self, tmp_path):
         result = gcc(tmp_path, program(linear(), 3))
@@ -325,6 +515,70 @@ class TestBpmnCbmcCompiles:
         link(g, b, "gb", "x != 1")
         source = program(make_bpmn(s, g, a, b), 3, "int x = 0;\n")
         assert gcc(tmp_path, source).returncode == 0
+
+
+class TestBpmnCbmcBehaviorsCompile:
+    def test_behaviors_compile(self, tmp_path):
+        behavior = (
+            "x = x + 1\nif\n:: x == 1 -> y = 2\n"
+            ":: else -> if\n:: true -> y = 3\n:: true -> y = 4\nfi\nfi"
+        )
+        source = program(
+            behavior_bpmn(behavior), 3, "int x = 0, y = 0;\n" + CWP_STUB, "true"
+        )
+        result = gcc(tmp_path, source)
+        assert result.returncode == 0, result.stderr
+
+    def test_parallel_gateways_compile(self, tmp_path):
+        for bpmn in (fork_join(), fork_loop(), nested()):
+            source = program(bpmn, 3, "int x = 0;\n" + CWP_STUB)
+            result = gcc(tmp_path, source)
+            assert result.returncode == 0, result.stderr
+
+
+def simple_cwp():
+    """A -> B -> C, driven by x. The init edge puts x == 0 in A."""
+    cwp = Cwp()
+    for name in "ABC":
+        cwp.states[name] = CwpState(name, name)
+    for i, (src, dst, expr) in enumerate([("A", "B", "x == 1"), ("B", "C", "x == 2")]):
+        edge = CwpEdge(f"e{i}", f"Edge{i}")
+        edge.expression = expr
+        edge.set_source(cwp.states[src])
+        edge.set_dest(cwp.states[dst])
+        cwp.states[src].out_edges.append(edge)
+        cwp.states[dst].in_edges.append(edge)
+        cwp.edges[edge.id] = edge
+    init = CwpEdge("init", "Init")
+    init.expression = "x == 0"
+    init.set_dest(cwp.states["A"])
+    cwp.states["A"].in_edges.append(init)
+    cwp.start_state = cwp.states["A"]
+    return cwp
+
+
+def cwp_program(bpmn, bound, assertion):
+    cwp = CwpCbmcVisitor()
+    simple_cwp().accept(cwp)
+    return f"""int x = 0;
+{cwp}
+{generate(bpmn)}
+int main(void) {{
+    cwp_init();
+    bpmn_init();
+    for (unsigned i = 0; i < {bound} && !bpmn_all_done(); i++) bpmn_step();
+    assert({assertion});
+    return 0;
+}}
+"""
+
+
+def two_tasks(first, second):
+    s, t1, t2, e = start(), task("T1", first), task("T2", second), end()
+    link(s, t1)
+    link(t1, t2)
+    link(t2, e)
+    return make_bpmn(s, t1, t2, e)
 
 
 @pytest.mark.skipif(
@@ -389,3 +643,124 @@ class TestBpmnCbmcVerifies:
         out = cbmc(tmp_path, program(make_bpmn(s, t, e), 4), 5)
         assert "VERIFICATION FAILED" in out
         assert "bpmn_overflow" in out
+
+    def test_fork_and_join(self, tmp_path):
+        assert "VERIFICATION SUCCESSFUL" in cbmc(
+            tmp_path, program(fork_join(), 6, CWP_STUB), 7
+        )
+
+    def test_fork_and_join_bound_is_tight(self, tmp_path):
+        out = cbmc(tmp_path, program(fork_join(), 5, CWP_STUB), 6)
+        assert "VERIFICATION FAILED" in out
+
+    def test_join_waits_for_the_other_branch(self, tmp_path):
+        # A's branch has no way to reach J's other incoming flow
+        s, f, a, j, e = (
+            start(),
+            ParallelGatewayNode("F", "F"),
+            task("A"),
+            ParallelGatewayNode("J", "J"),
+            end(),
+        )
+        link(s, f)
+        link(f, a)
+        link(f, e, "fe")
+        link(a, j)
+        link(j, e, "je")
+        # J has a single incoming flow, so it is a join that A alone enables
+        out = cbmc(tmp_path, program(make_bpmn(s, f, a, j, e), 5, CWP_STUB), 6)
+        assert "VERIFICATION SUCCESSFUL" in out
+
+    def test_join_with_missing_branch_blocks(self, tmp_path):
+        s, f, a, j, e = (
+            start(),
+            ParallelGatewayNode("F", "F"),
+            task("A"),
+            ParallelGatewayNode("J", "J"),
+            end(),
+        )
+        link(s, f)
+        link(f, a)
+        link(f, j, "fj")
+        link(a, j)
+        link(j, e)
+        out = cbmc(tmp_path, program(make_bpmn(s, f, a, j, e), 5, CWP_STUB, "true"), 6)
+        assert "VERIFICATION SUCCESSFUL" in out
+        # J needs both tokens, so it takes A's run to get there
+        blocked = program(make_bpmn(s, f, a, j, e), 3, CWP_STUB, "!done_P")
+        assert "VERIFICATION SUCCESSFUL" in cbmc(tmp_path, blocked, 4)
+
+    def test_fork_with_loop_back_does_not_deadlock(self, tmp_path):
+        # S F A B J G, then F A B J G again with x == 2, then the end: 12 passes
+        ok = cbmc(tmp_path, program(fork_loop(), 12, "int x = 0;\n" + CWP_STUB), 13)
+        assert "VERIFICATION SUCCESSFUL" in ok
+        short = cbmc(tmp_path, program(fork_loop(), 11, "int x = 0;\n" + CWP_STUB), 12)
+        assert "VERIFICATION FAILED" in short
+
+    def test_nested_gateways(self, tmp_path):
+        # S F1 A F2 B C J2 J1 E
+        assert "VERIFICATION SUCCESSFUL" in cbmc(
+            tmp_path, program(nested(), 9, CWP_STUB), 10
+        )
+        assert "VERIFICATION FAILED" in cbmc(
+            tmp_path, program(nested(), 8, CWP_STUB), 9
+        )
+
+    def test_behavior_assigns_and_gateway_compares(self, tmp_path):
+        s, t, g, a, b = (
+            start(),
+            task("T", "x = 1"),
+            ExclusiveGatewayNode("G", "G"),
+            end("A"),
+            end("B"),
+        )
+        link(s, t)
+        link(t, g)
+        link(g, a, "ga", "x == 1")
+        link(g, b, "gb", "x != 1")
+        out = cbmc(
+            tmp_path,
+            program(
+                make_bpmn(s, t, g, a, b),
+                4,
+                "int x = 0;\n" + CWP_STUB,
+                "done_P && x == 1 && !tok_gb",
+            ),
+            5,
+        )
+        assert "VERIFICATION SUCCESSFUL" in out
+
+    def test_nondeterministic_behavior_reaches_each_option(self, tmp_path):
+        behavior = "if\n:: true -> y = 1\n:: true -> y = 2\nfi"
+        for wrong in ("y != 1", "y != 2"):
+            source = program(
+                behavior_bpmn(behavior), 3, "int y = 0;\n" + CWP_STUB, wrong
+            )
+            assert "VERIFICATION FAILED" in cbmc(tmp_path, source, 4)
+        ok = program(
+            behavior_bpmn(behavior), 3, "int y = 0;\n" + CWP_STUB, "y == 1 || y == 2"
+        )
+        assert "VERIFICATION SUCCESSFUL" in cbmc(tmp_path, ok, 4)
+
+    def test_behavior_else_branch(self, tmp_path):
+        behavior = "if\n:: x == 1 -> y = 1\n:: else -> y = 2\nfi"
+        source = program(
+            behavior_bpmn(behavior), 3, "int x = 0, y = 0;\n" + CWP_STUB, "y == 2"
+        )
+        assert "VERIFICATION SUCCESSFUL" in cbmc(tmp_path, source, 4)
+
+    def test_cwp_follows_behaviors(self, tmp_path):
+        source = cwp_program(two_tasks("x = 1", "x = 2"), 4, "cwp_state == CWP_C")
+        assert "VERIFICATION SUCCESSFUL" in cbmc(tmp_path, source, 5)
+
+    def test_cwp_not_updated_without_behavior(self, tmp_path):
+        source = cwp_program(two_tasks("x = 1", ""), 4, "cwp_state == CWP_B")
+        assert "VERIFICATION SUCCESSFUL" in cbmc(tmp_path, source, 5)
+
+    def test_cwp_update_rejects_an_invalid_move(self, tmp_path):
+        # A -> C skips B, which the CWP does not allow
+        source = cwp_program(two_tasks("x = 2", ""), 4, "true")
+        out = cbmc(tmp_path, source, 5)
+        assert "VERIFICATION FAILED" in out
+        assert re.search(r"assertion .*: FAILURE", out)
+        assert "assertion true: SUCCESS" in out
