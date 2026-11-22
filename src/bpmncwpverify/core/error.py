@@ -216,6 +216,14 @@ class BpmnCbmcUnsupportedElementError(Error):
         self.element_kind = element_kind
 
 
+class CbmcBuildError(Error):
+    __slots__ = ["reason"]
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+
 class CwpEdgeNoParentExprError(Error):
     __slots__ = ["edge"]
 
@@ -677,6 +685,8 @@ def get_error_message(error: Error) -> str:
             element_id=element_id, element_kind=element_kind
         ):
             return f"BPMN ERROR: {element_kind} '{element_id}' cannot be expressed in C, so it is not supported by the CBMC back end."
+        case CbmcBuildError(reason=reason):
+            return f"CBMC ERROR: could not build the C program: {reason}"
         case CwpEdgeNoParentExprError(edge=edge):
             return f"CWP ERROR: Expression or parent node not found in edge. Edge details: {edge.attrib}."
         case CwpEdgeNoStateError(edge=edge):
