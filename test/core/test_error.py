@@ -5,6 +5,7 @@ import pytest
 from returns.maybe import Nothing, Some
 
 from bpmncwpverify.core.error import (
+    BpmnCbmcUnsupportedElementError,
     BpmnFlowIncomingError,
     BpmnFlowNoIdError,
     BpmnFlowOutgoingError,
@@ -29,6 +30,10 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcAssertionError,
+    CbmcBuildError,
+    CbmcRunError,
+    CbmcUnreachableError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -159,6 +164,26 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnTaskFlowError("task_id"),
         "Task flow error: Task 'task_id' should have at least one incoming and one outgoing flow.",
+    ),
+    (
+        BpmnCbmcUnsupportedElementError("el_id", "parallel gateway"),
+        "BPMN ERROR: parallel gateway 'el_id' cannot be expressed in C.",
+    ),
+    (
+        CbmcBuildError("reason"),
+        "CBMC ERROR: Could not build the C program. reason",
+    ),
+    (
+        CbmcAssertionError([{"description": "bad", "line": "7"}]),
+        "CBMC ASSERTION ERROR: 1 assertion(s) failed:\n1: bad (line 7)",
+    ),
+    (
+        CbmcRunError("no cbmc"),
+        "CBMC ERROR: Could not run CBMC. no cbmc",
+    ),
+    (
+        CbmcUnreachableError(["CWP state A", "end event B"]),
+        "CBMC REACHABILITY ERROR: 2 unreachable:\n1: CWP state A\n2: end event B",
     ),
     (
         BpmnUnrecognizedElement("element_name"),
@@ -336,6 +361,11 @@ test_ids: list[str] = [
     "BpmnSeqFlowNoExprError",
     "BpmnStructureError",
     "BpmnTaskFlowError",
+    "BpmnCbmcUnsupportedElementError",
+    "CbmcBuildError",
+    "CbmcAssertionError",
+    "CbmcRunError",
+    "CbmcUnreachableError",
     "BpmnUnrecognizedElement",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
