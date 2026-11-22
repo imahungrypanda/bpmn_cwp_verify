@@ -1,0 +1,10 @@
+enum PatientNeed { patientNeedInit homeCare discharge expired outsideHomeCare }
+enum BinDecision { binDecisionInit yes no }
+enum Time { timeInit scheduled unscheduled now }
+
+var sevNeed: PatientNeed = patientNeedInit
+var trndSevNeed: PatientNeed = patientNeedInit
+
+var alert: BinDecision = binDecisionInit
+
+var examTime: Time = timeInit

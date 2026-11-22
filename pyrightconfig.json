@@ -1,0 +1,19 @@
+{
+  "typeCheckingMode": "strict",
+  "pythonVersion": "3.12",
+  "include": ["src"],
+  "exclude": [
+    "src/bpmncwpverify/antlr",
+    "test",
+    "**/__pycache__",
+    "**/.venv",
+    "**/.mypy_cache",
+    "**/build",
+    "**/dist"
+  ],
+  "reportUnknownArgumentType": false,
+  "extraPaths": [
+    "src",
+    "/var/lang/lib/python3.12/site-packages/"
+  ]
+}

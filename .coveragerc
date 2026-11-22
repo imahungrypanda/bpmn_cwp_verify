@@ -1,0 +1,9 @@
+[run]
+branch = True
+omit =
+    */test/*
+    */antlr/*
+
+
+[report]
+show_missing = True
