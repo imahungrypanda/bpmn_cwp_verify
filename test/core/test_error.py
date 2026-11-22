@@ -30,6 +30,7 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcBuildError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -164,6 +165,10 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnCbmcUnsupportedElementError("el_id", "parallel gateway"),
         "BPMN ERROR: parallel gateway 'el_id' cannot be expressed in C.",
+    ),
+    (
+        CbmcBuildError("reason"),
+        "CBMC ERROR: Could not build the C program. reason",
     ),
     (
         BpmnUnrecognizedElement("element_name"),
@@ -342,6 +347,7 @@ test_ids: list[str] = [
     "BpmnStructureError",
     "BpmnTaskFlowError",
     "BpmnCbmcUnsupportedElementError",
+    "CbmcBuildError",
     "BpmnUnrecognizedElement",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
