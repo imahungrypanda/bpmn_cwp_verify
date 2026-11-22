@@ -30,6 +30,7 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcBuildError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -76,6 +77,10 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnNoSwimLaneNameError(["Proces_32kdf8"]),
         "Bpmn error: ['Proces_32kdf8'] must have a swimlane with a name that is different from their ID",
+    ),
+    (
+        CbmcBuildError("no reason"),
+        "CBMC ERROR: Could not build the C program: no reason.",
     ),
     (
         BpmnCbmcUnsupportedElementError("id", "no reason"),
@@ -320,6 +325,7 @@ test_inputs: list[tuple[Error, str]] = [
 test_ids: list[str] = [
     "BpmnNoElementNameError",
     "BpmnNoSwimLaneNameError",
+    "CbmcBuildError",
     "BpmnCbmcUnsupportedElementError",
     "BpmnFlowIncomingError",
     "BpmnFlowNoIdError",
