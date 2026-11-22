@@ -28,6 +28,15 @@ class BpmnNoSwimLaneNameError(Error):
         self.ids = ids
 
 
+class BpmnCbmcUnsupportedElementError(Error):
+    __slots__ = ["element_id", "reason"]
+
+    def __init__(self, element_id: str, reason: str) -> None:
+        super().__init__()
+        self.element_id = element_id
+        self.reason = reason
+
+
 class BpmnFlowIncomingError(Error):
     __slots__ = ["node_id"]
 
@@ -620,6 +629,8 @@ def get_error_message(error: Error) -> str:
             )
         case BpmnNoSwimLaneNameError(ids=ids):
             return f"Bpmn error: {ids} must have a swimlane with a name that is different from their ID"
+        case BpmnCbmcUnsupportedElementError(element_id=element_id, reason=reason):
+            return f"BPMN CBMC ERROR: Element '{element_id}' can't be expressed in C: {reason}."
         case BpmnFlowIncomingError(node_id=node_id):
             return f"Flow error: All flow objects other than start events, boundary events, and compensating activities must have an incoming sequence flow, if the process level includes any start or end events. node: {node_id}."
         case BpmnFlowNoIdError(element=element):
