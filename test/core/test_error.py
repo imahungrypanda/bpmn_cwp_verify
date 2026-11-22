@@ -30,6 +30,7 @@ from bpmncwpverify.core.error import (
     BpmnStructureError,
     BpmnTaskFlowError,
     BpmnUnrecognizedElement,
+    CbmcBuildError,
     CounterExampleError,
     CwpEdgeNoParentExprError,
     CwpEdgeNoStateError,
@@ -160,6 +161,10 @@ test_inputs: list[tuple[Error, str]] = [
     (
         BpmnTaskFlowError("task_id"),
         "Task flow error: Task 'task_id' should have at least one incoming and one outgoing flow.",
+    ),
+    (
+        CbmcBuildError("some reason"),
+        "ERROR: failed to build C for CBMC: some reason",
     ),
     (
         BpmnCbmcUnsupportedElementError("elem_id", "some reason"),
@@ -342,6 +347,7 @@ test_ids: list[str] = [
     "BpmnStructureError",
     "BpmnTaskFlowError",
     "BpmnCbmcUnsupportedElementError",
+    "CbmcBuildError",
     "BpmnUnrecognizedElement",
     "CwpEdgeNoParentExprError",
     "CwpEdgeNoStateError",
